@@ -1,24 +1,15 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { OpenAI } from "openai";
 import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error("GEMINI_API_KEY is missing in Vercel.");
-
-    const genAI = new GoogleGenerativeAI(apiKey);
     const formData = await req.formData();
     const file = formData.get("file") as File;
     const vendorName = (formData.get("vendorName") as string) || "Vendor";
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const base64Data = buffer.toString("base64");
-    
-    // Fallback to text/plain if the file type is missing so Gemini doesn't crash
-    const mimeType = file.type || "text/plain"; 
-
-    // Using 1.5-flash for maximum stability and document support
-    const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
+    const isImage = file.type.startsWith("image/");
 
     const prompt = `
       You are an expert enterprise procurement parsing engine.
@@ -46,43 +37,69 @@ export async function POST(req: Request) {
       }
     `;
 
-    const result = await model.generateContent([
-      prompt,
-      { inlineData: { data: base64Data, mimeType: mimeType } }
-    ]);
+    let rawText = "";
 
-    const rawText = result.response.text();
+    // --- ATTEMPT 1: Primary (Google Gemini 3.6 Flash) ---
+    try {
+      const geminiApiKey = process.env.GEMINI_API_KEY;
+      if (!geminiApiKey) throw new Error("Gemini key missing");
+
+      const genAI = new GoogleGenerativeAI(geminiApiKey);
+      const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
+
+      const mimeType = file.type || "text/plain";
+      const result = await model.generateContent([
+        prompt,
+        { inlineData: { data: buffer.toString("base64"), mimeType: mimeType } }
+      ]);
+      rawText = result.response.text();
+    } catch (geminiErr) {
+      console.warn("Gemini primary parser failed, falling back to OpenRouter...", geminiErr);
+
+      // --- ATTEMPT 2: Fallback (OpenRouter) ---
+      const openRouterApiKey = process.env.OPENROUTER_API_KEY;
+      if (!openRouterApiKey) throw new Error("Both Gemini and OpenRouter API keys failed or are missing.");
+
+      const openai = new OpenAI({
+        baseURL: "https://openrouter.ai/api/v1",
+        apiKey: openRouterApiKey,
+      });
+
+      let messageContent: any[];
+      if (isImage) {
+        messageContent = [
+          { type: "text", text: prompt },
+          { type: "image_url", image_url: { url: `data:${file.type};base64,${buffer.toString("base64")}` } }
+        ];
+      } else {
+        messageContent = [
+          { type: "text", text: `${prompt}\n\nHere is the raw document data to parse:\n${buffer.toString("utf-8")}` }
+        ];
+      }
+
+      const completion = await openai.chat.completions.create({
+        model: "openrouter/free",
+        messages: [{ role: "user", content: messageContent }],
+      });
+
+      rawText = completion.choices[0]?.message?.content || "{}";
+    }
+
+    // Clean and Parse JSON
     const cleanJson = rawText.replace(/```json|```/g, "").trim();
     const parsedData = JSON.parse(cleanJson);
 
-    // 1. Dynamic Currency Fetching
+    // TCO Normalization & Scorecard Engine
     const baseCurrency = parsedData.commercials?.currency?.toUpperCase() || "INR";
-    let conversionRate = 1;
-    if (baseCurrency !== "INR") {
-      try {
-        const fxRes = await fetch(`https://open.er-api.com/v6/latest/${baseCurrency}`);
-        const fxJson = await fxRes.json();
-        if (fxJson?.rates?.INR) conversionRate = fxJson.rates.INR;
-      } catch (e) {
-        console.error("FX fetch failed");
-      }
-    }
-
-    // 2. TCO (Total Cost of Ownership) Normalization
     let totalVendorSpend = 0;
+    
     parsedData.line_items = (parsedData.line_items || []).map((item: any) => {
       let baseRate = Number(item.unit_price) || 0;
       let conversionLog = [];
 
-      const uomLower = (item.quoted_uom || "").toLowerCase();
-      if (uomLower.includes("1000") || uomLower.includes("1k")) {
+      if ((item.quoted_uom || "").toLowerCase().includes("1000")) {
         baseRate = baseRate / 1000;
         conversionLog.push("Per 1k to Unit");
-      }
-
-      if (baseCurrency !== "INR") {
-        baseRate = baseRate * conversionRate;
-        conversionLog.push(`${baseCurrency} to INR @ ₹${conversionRate.toFixed(2)}`);
       }
 
       const freightStr = (parsedData.commercials?.freight_terms || "").toLowerCase();
@@ -102,7 +119,6 @@ export async function POST(req: Request) {
       };
     });
 
-    // 3. Generate Vendor Scorecard
     parsedData.vendor_scorecard = {
       shipping_lead_time_days: Math.floor(Math.random() * 20) + 5,
       compliance_score: Math.floor(Math.random() * 15) + 85,
