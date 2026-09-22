@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-Gfm";
+import remarkGfm from "remark-gfm";
 
 export default function Dashboard() {
   const [vendorData, setVendorData] = useState<any[]>([]);
