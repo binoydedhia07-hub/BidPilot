@@ -1,20 +1,18 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { OpenAI } from "openai";
 import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error("API Key missing");
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) throw new Error("OPENROUTER_API_KEY is missing in Vercel.");
+
+    // OpenRouter uses the exact same format as the standard OpenAI SDK
+    const openai = new OpenAI({
+      baseURL: "https://openrouter.ai/api/v1",
+      apiKey: apiKey,
+    });
 
     const { question, context, chatLog } = await req.json();
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
-
-    // Format chat history for Gemini
-    const history = (chatLog || []).map((msg: any) => ({
-      role: msg.role === "assistant" ? "model" : "user",
-      parts: [{ text: msg.text }]
-    }));
 
     const systemPrompt = `
       You are the lead procurement analyst copilot for Aerchain. Advise a category buyer with a ₹4 crore budget.
@@ -23,23 +21,28 @@ export async function POST(req: Request) {
       ${JSON.stringify(context, null, 2)}
       
       Rules:
-      1. Use ONLY the provided Master Data.
+      1. Use ONLY the provided Master Data. Do not hallucinate math or vendor names.
       2. Format your response in clean Markdown (use **bolding**, bullet points, and Markdown tables heavily).
-      3. Chain of Thought: If calculating totals or comparing prices, briefly show the arithmetic (e.g., Base + Freight = Total).
+      3. Chain of Thought: If calculating totals or comparing prices, explicitly show the arithmetic line-by-line before declaring an answer.
       4. Factor in the Vendor Scorecard (Risk, Lead Time, Compliance) when making recommendations.
     `;
 
-    // Inject system rules as the first hidden interaction
-    const chat = model.startChat({
-      history: [
-        { role: "user", parts: [{ text: systemPrompt }] },
-        { role: "model", parts: [{ text: "Acknowledged. I will strictly adhere to the master data, show my math, and use Markdown formatting." }] },
-        ...history
-      ]
+    // Map the React chat history into the API format
+    const messages = [
+      { role: "system", content: systemPrompt },
+      ...(chatLog || []).map((msg: any) => ({
+        role: msg.role === "assistant" ? "assistant" : "user",
+        content: msg.text
+      })),
+      { role: "user", content: question }
+    ];
+
+    const completion = await openai.chat.completions.create({
+      model: "openrouter/free", // Automatically routes to the highest-availability free reasoning model
+      messages: messages as any,
     });
 
-    const result = await chat.sendMessage(question);
-    return NextResponse.json({ text: result.response.text() });
+    return NextResponse.json({ text: completion.choices[0].message.content });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
