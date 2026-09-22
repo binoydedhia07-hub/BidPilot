@@ -1,24 +1,24 @@
-import { OpenAI } from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
   try {
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) throw new Error("OPENROUTER_API_KEY is missing in Vercel.");
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error("GEMINI_API_KEY is missing in Vercel.");
 
-    const openai = new OpenAI({
-      baseURL: "https://openrouter.ai/api/v1",
-      apiKey: apiKey,
-    });
-
+    const genAI = new GoogleGenerativeAI(apiKey);
     const formData = await req.formData();
     const file = formData.get("file") as File;
     const vendorName = (formData.get("vendorName") as string) || "Vendor";
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const base64Data = buffer.toString("base64");
-    // Standardize mime types for the OpenAI vision API format
-    const mimeType = file.type || "image/jpeg";
+    
+    // Fallback to text/plain if the file type is missing so Gemini doesn't crash
+    const mimeType = file.type || "text/plain"; 
+
+    // Using 1.5-flash for maximum stability and document support
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
     const prompt = `
       You are an expert enterprise procurement parsing engine.
@@ -46,27 +46,12 @@ export async function POST(req: Request) {
       }
     `;
 
-    // Send the base64 document to OpenRouter's multimodal router
-    const completion = await openai.chat.completions.create({
-      model: "openrouter/free", 
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: prompt },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:${mimeType};base64,${base64Data}`,
-              },
-            },
-          ],
-        },
-      ],
-    });
+    const result = await model.generateContent([
+      prompt,
+      { inlineData: { data: base64Data, mimeType: mimeType } }
+    ]);
 
-    // Clean and parse the JSON output
-    const rawText = completion.choices[0]?.message?.content || "{}";
+    const rawText = result.response.text();
     const cleanJson = rawText.replace(/```json|```/g, "").trim();
     const parsedData = JSON.parse(cleanJson);
 
