@@ -4,33 +4,43 @@ import { NextResponse } from "next/server";
 export async function POST(req: Request) {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ error: "GEMINI_API_KEY is not configured." }, { status: 500 });
-    }
+    if (!apiKey) throw new Error("API Key missing");
 
-    const { question, context } = await req.json();
+    const { question, context, chatLog } = await req.json();
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
 
-    const prompt = `
-      You are the lead procurement analyst copilot for Aerchain.
-      You are advising a category buyer with ₹4 crore on the line.
+    // Format chat history for Gemini
+    const history = (chatLog || []).map((msg: any) => ({
+      role: msg.role === "assistant" ? "model" : "user",
+      parts: [{ text: msg.text }]
+    }));
 
-      Normalized Submissions Context:
+    const systemPrompt = `
+      You are the lead procurement analyst copilot for Aerchain. Advise a category buyer with a ₹4 crore budget.
+      
+      Master Data Context:
       ${JSON.stringify(context, null, 2)}
-
-      Buyer Inquiry: "${question}"
-
-      Instructions:
-      1. Strictly compute numbers from normalized_price_inr and stated commercial terms. Never invent prices.
-      2. If calculating total spend or split scenarios, display a short breakdown showing your arithmetic.
-      3. If a vendor missed a line or has non-standard freight/cash discount terms, explicitly call it out.
-      4. End with an actionable recommendation (e.g. single-source vs split-award).
+      
+      Rules:
+      1. Use ONLY the provided Master Data.
+      2. Format your response in clean Markdown (use **bolding**, bullet points, and Markdown tables heavily).
+      3. Chain of Thought: If calculating totals or comparing prices, briefly show the arithmetic (e.g., Base + Freight = Total).
+      4. Factor in the Vendor Scorecard (Risk, Lead Time, Compliance) when making recommendations.
     `;
 
-    const result = await model.generateContent(prompt);
+    // Inject system rules as the first hidden interaction
+    const chat = model.startChat({
+      history: [
+        { role: "user", parts: [{ text: systemPrompt }] },
+        { role: "model", parts: [{ text: "Acknowledged. I will strictly adhere to the master data, show my math, and use Markdown formatting." }] },
+        ...history
+      ]
+    });
+
+    const result = await chat.sendMessage(question);
     return NextResponse.json({ text: result.response.text() });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message || "Copilot error" }, { status: 500 });
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
