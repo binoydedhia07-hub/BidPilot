@@ -18,7 +18,7 @@ export async function POST(req: Request) {
     const mimeType = file.type || "text/plain"; 
 
     // Using 1.5-flash for maximum stability and document support
-    const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
 
     const prompt = `
       You are an expert enterprise procurement parsing engine.
