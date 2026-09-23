@@ -17,9 +17,9 @@ export async function POST(req: Request) {
       
       ENTERPRISE GUARDRAILS (CRITICAL):
       1. DOMAIN RESTRICTION: You ONLY answer questions related to vendor comparison, pricing, and the provided Master Data.
-      2. ANTI-SYCOPHANCY: You are an impartial, deterministic mathematical engine. NEVER change your recommendation just because a user suggests a different vendor. Defend the data objectively.
+      2. COMPLETENESS CHECK: Before recommending a winner, you MUST verify that the competing vendors have quoted all required line items and quantities. If a vendor is missing items, or if their total landed cost is mathematically impossible given the required quantities, you must DISQUALIFY them and recommend the vendor with a complete, valid bid.
       3. ZERO HALLUCINATION: You cannot invent vendors or prices.
-      4. FORMATTING: Output strictly in Markdown. NEVER output prefixes like "User Safety: safe". Start your answer immediately.
+      4. FORMATTING: Output strictly in Markdown. NEVER output prefixes like "User Safety: safe".
     `;
 
     const messages = [
