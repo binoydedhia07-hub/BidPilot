@@ -78,8 +78,9 @@ export async function POST(req: Request) {
       }
 
       // Explicitly force a vision model if the file is an image
+      // Explicitly force a vision model if the file is an image
       const fallbackModel = isImage 
-        ? "meta-llama/llama-3.2-11b-vision-instruct:free" 
+        ? "google/gemini-1.5-flash:free" 
         : "openrouter/free";
 
       const completion = await openai.chat.completions.create({
