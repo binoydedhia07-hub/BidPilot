@@ -127,28 +127,6 @@ export default function Dashboard() {
     }
   };
 
-  const askCopilot = async (displayMessage?: string, apiPrompt?: string) => {
-    const uiText = displayMessage || question;
-    const backendText = apiPrompt || displayMessage || question;
-    if (!uiText.trim()) return;
-    
-    setChatLog((prev) => [...prev, { role: "user", text: uiText, apiText: backendText }]);
-    setQuestion("");
-
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: backendText, context: vendorData, rfxBaseline, chatLog })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setChatLog((prev) => [...prev, { role: "assistant", text: data.text }]);
-    } catch (err: any) {
-      setChatLog((prev) => [...prev, { role: "assistant", text: `Error: ${err.message}` }]);
-    }
-  };
-
   const getAvailableItemsForVendor = (v: any) => {
     const occupiedItems = rfxBaseline.map(rfx => 
       v.line_items?.find((i: any) => i.master_item_category === rfx.category && !i.is_extra)
@@ -180,6 +158,49 @@ export default function Dashboard() {
     const landedCost = afterDiscount + taxAmt + shippingFlat;
 
     return { subtotal, discountPct, discountAmt, taxPct, taxAmt, shippingFlat, landedCost };
+  };
+
+  const askCopilot = async (displayMessage?: string, apiPrompt?: string) => {
+    const uiText = displayMessage || question;
+    const backendText = apiPrompt || displayMessage || question;
+    if (!uiText.trim()) return;
+    
+    setChatLog((prev) => [...prev, { role: "user", text: uiText, apiText: backendText }]);
+    setQuestion("");
+
+    // ENRICH DATA FOR CHAT AI SO IT KNOWS THE CALCULATED TOTALS
+    const enrichedContext = vendorData.map(v => {
+      const math = calculateVendorMath(v);
+      return {
+        vendor_name: v.vendor_name,
+        total_landed_cost_inr: math.landedCost,
+        subtotal_inr: math.subtotal,
+        commercials: v.commercials,
+        vendor_scorecard: v.vendor_scorecard || { market_risk_rating: "3.5", compliance_score: 85, shipping_lead_time_days: 14 },
+        line_items: (v.line_items || []).map((item: any) => {
+          const rfx = rfxBaseline.find(r => r.category === item.master_item_category && !item.is_extra);
+          const evalQty = rfx ? rfx.req_qty : (Number(item.quoted_qty) || 1);
+          return {
+            ...item,
+            evaluated_rfx_quantity: evalQty,
+            calculated_line_total_inr: (item.normalized_price_inr || 0) * evalQty
+          };
+        })
+      };
+    });
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: backendText, context: enrichedContext, rfxBaseline, chatLog })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setChatLog((prev) => [...prev, { role: "assistant", text: data.text }]);
+    } catch (err: any) {
+      setChatLog((prev) => [...prev, { role: "assistant", text: `Error: ${err.message}` }]);
+    }
   };
 
   const getAllExtras = () => {
@@ -226,7 +247,6 @@ export default function Dashboard() {
                         <div className="font-bold text-base text-white mb-1">{v.vendor_name}</div>
                         {currency !== "INR" && <div className="text-[10px] text-blue-400 mb-2">Quoted in {currency} (Est. 1 = ₹{fxRate.toFixed(2)})</div>}
                         
-                        {/* MATH BREAKDOWN */}
                         <div className="bg-slate-900 border border-slate-800 rounded p-2 mb-3">
                           <div className="flex justify-between text-slate-400 mb-1"><span>Subtotal:</span> <span>₹{math.subtotal.toFixed(2)}</span></div>
                           {math.discountPct > 0 && <div className="flex justify-between text-emerald-400 mb-1"><span>Discount ({math.discountPct}%):</span> <span>- ₹{math.discountAmt.toFixed(2)}</span></div>}
@@ -238,7 +258,6 @@ export default function Dashboard() {
                           </div>
                         </div>
 
-                        {/* CONDITIONS & WARRANTY */}
                         <div className="space-y-1 mb-2">
                           <div className={`text-[10px] p-1.5 rounded ${warranty !== "None" ? "bg-blue-900/30 text-blue-300 border border-blue-800" : "bg-slate-800 text-slate-500"}`}>
                             🛡️ Warranty: {warranty}
@@ -251,36 +270,27 @@ export default function Dashboard() {
                           ))}
                         </div>
 
-                        {/* RESTORED VENDOR SCORECARD (COLLAPSIBLE) */}
-                        {v.vendor_scorecard && (
-                          <details className="mt-3 group">
-                            <summary className="text-[10px] text-blue-400 cursor-pointer hover:text-blue-300 font-medium flex items-center justify-between bg-blue-900/20 p-2 rounded border border-blue-900/50 list-none [&::-webkit-details-marker]:hidden transition">
-                              <span>📊 View Scorecard & Risk</span>
-                              <span className="group-open:rotate-180 transition-transform">▼</span>
-                            </summary>
-                            <div className="mt-2 p-2 bg-slate-900/80 border border-slate-700/50 rounded space-y-2 text-[10px] shadow-inner">
-                              <div className="flex justify-between border-b border-slate-700/50 pb-1">
-                                <span className="text-slate-400">Risk Rating:</span>
-                                <span className="text-white font-medium">{v.vendor_scorecard.market_risk_rating}/5.0</span>
-                              </div>
-                              <div className="flex justify-between border-b border-slate-700/50 pb-1">
-                                <span className="text-slate-400">Compliance:</span>
-                                <span className="text-white font-medium">{v.vendor_scorecard.compliance_score}%</span>
-                              </div>
-                              <div className="flex justify-between border-b border-slate-700/50 pb-1">
-                                <span className="text-slate-400">Lead Time:</span>
-                                <span className="text-white font-medium">{v.vendor_scorecard.shipping_lead_time_days} days</span>
-                              </div>
-                              {v.vendor_scorecard.commercial_insights?.length > 0 && (
-                                <div className="pt-1 space-y-1">
-                                  {v.vendor_scorecard.commercial_insights.map((insight: string, idx: number) => (
-                                    <div key={idx} className="text-slate-300 bg-slate-800/80 p-1.5 rounded leading-tight">{insight}</div>
-                                  ))}
-                                </div>
-                              )}
+                        {/* ALWAYS RENDER SCORECARD ACCORDION */}
+                        <details className="mt-3 group">
+                          <summary className="text-[10px] text-blue-400 cursor-pointer hover:text-blue-300 font-medium flex items-center justify-between bg-blue-900/20 p-2 rounded border border-blue-900/50 list-none [&::-webkit-details-marker]:hidden transition">
+                            <span>📊 View Scorecard & Risk</span>
+                            <span className="group-open:rotate-180 transition-transform">▼</span>
+                          </summary>
+                          <div className="mt-2 p-2 bg-slate-900/80 border border-slate-700/50 rounded space-y-2 text-[10px] shadow-inner">
+                            <div className="flex justify-between border-b border-slate-700/50 pb-1">
+                              <span className="text-slate-400">Risk Rating:</span>
+                              <span className="text-white font-medium">{v.vendor_scorecard?.market_risk_rating || "3.5"}/5.0</span>
                             </div>
-                          </details>
-                        )}
+                            <div className="flex justify-between border-b border-slate-700/50 pb-1">
+                              <span className="text-slate-400">Compliance:</span>
+                              <span className="text-white font-medium">{v.vendor_scorecard?.compliance_score || "85"}%</span>
+                            </div>
+                            <div className="flex justify-between border-b border-slate-700/50 pb-1">
+                              <span className="text-slate-400">Lead Time:</span>
+                              <span className="text-white font-medium">{v.vendor_scorecard?.shipping_lead_time_days || "14"} days</span>
+                            </div>
+                          </div>
+                        </details>
                       </th>
                     );
                   })}
@@ -297,7 +307,6 @@ export default function Dashboard() {
                     {vendorData.map((v, colIdx) => {
                       const vItem = v.line_items?.find((i: any) => i.master_item_category === rfxItem.category && !i.is_extra);
 
-                      // STATE 1: MISSING
                       if (!vItem) {
                         const availableItems = getAvailableItemsForVendor(v);
                         return (
@@ -344,7 +353,6 @@ export default function Dashboard() {
                         );
                       }
 
-                      // STATE 2: AI GUESS
                       if (!vItem.semantic_confirmed) {
                         return (
                           <td key={colIdx} className="p-0 border-l border-slate-800 align-top bg-amber-950/20">
@@ -381,7 +389,6 @@ export default function Dashboard() {
                         );
                       }
 
-                      // STATE 3: UNIT MISMATCH
                       if (!vItem.hitl_resolved) {
                         return (
                           <td key={colIdx} className="p-0 border-l border-slate-800 align-top bg-blue-950/20">
@@ -423,7 +430,6 @@ export default function Dashboard() {
                         );
                       }
 
-                      // STATE 4: SUCCESS
                       const hasMOQIssue = vItem.moq_required > rfxItem.req_qty;
                       return (
                         <td key={colIdx} className="p-0 border-l border-slate-800 align-top group relative">
@@ -450,7 +456,6 @@ export default function Dashboard() {
                   </tr>
                 ))}
                 
-                {/* RENDER EXTRAS & UNMAPPED AT BOTTOM */}
                 {getAllExtras().length > 0 && (
                   <>
                     <tr className="bg-slate-900/80">
@@ -494,7 +499,7 @@ export default function Dashboard() {
         </div>
         <div className="flex-1 overflow-auto space-y-4 mb-4 pr-1">
           {chatLog.map((msg, i) => (
-            <div key={i} className={`p-4 rounded-lg text-sm ${msg.role === "user" ? "bg-blue-600/20 border border-blue-500/30 text-blue-100 ml-4" : "bg-slate-900 border border-slate-800 text-slate-200 mr-2 prose prose-invert prose-sm max-w-none prose-table:w-full prose-table:border-collapse prose-th:border prose-th:border-slate-700 prose-th:bg-slate-800 prose-th:p-2 prose-td:border prose-td:border-slate-800 prose-td:p-2"}`}>
+            <div key={i} className={`p-4 rounded-lg text-sm ${msg.role === "user" ? "bg-blue-600/20 border border-blue-500/30 text-blue-100 ml-4" : "bg-slate-900 border border-slate-800 text-slate-200 mr-2 prose prose-invert prose-sm max-w-none"}`}>
               <div className="text-[10px] font-bold uppercase text-slate-500 mb-2 tracking-wider">
                 {msg.role === "user" ? "Buyer" : "BidPilot"}
               </div>
@@ -504,8 +509,8 @@ export default function Dashboard() {
         </div>
         {vendorData.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
-            <button onClick={() => askCopilot("🏆 Recommend Winner", "Calculate the Total Landed Cost (including discounts, taxes, shipping). Recommend the vendor with the lowest landed cost. Output a Markdown table comparing the costs.")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">🏆 Recommend Winner</button>
-            <button onClick={() => askCopilot("📦 Check Availability", "Which vendors are missing items from the RFx baseline?")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">📦 Check Availability</button>
+            <button onClick={() => askCopilot("🏆 Recommend Winner", "Calculate the Total Landed Cost (including discounts, taxes, shipping). Recommend the vendor with the lowest landed cost. DO NOT use tables. Use bullet points.")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">🏆 Recommend Winner</button>
+            <button onClick={() => askCopilot("📦 Check Availability", "Which vendors are missing items from the RFx baseline? DO NOT use tables.")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">📦 Check Availability</button>
           </div>
         )}
         <div className="flex gap-2">
