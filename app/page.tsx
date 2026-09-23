@@ -50,10 +50,7 @@ export default function Dashboard() {
 
   const recalculateItemPrice = (item: any, vendor: any, multiplier: number) => {
     const rawPrice = Number(item.unit_price) || 0;
-    const freightStr = (vendor.commercials?.freight_terms || "").toLowerCase();
-    let baseRate = rawPrice / multiplier;
-    if (freightStr.includes("ex-works") || freightStr.includes("extra")) baseRate *= 1.025;
-    return baseRate;
+    return rawPrice / multiplier; // Freight is now handled in the total calculation
   };
 
   const handleFileUpload = async (e: any) => {
@@ -156,20 +153,30 @@ export default function Dashboard() {
     return (v.line_items || []).filter((i: any) => !occupiedItems.includes(i));
   };
 
+  // NEW TOTAL LANDED COST MATH INCLUDING COMMERCIALS
   const calculateVendorTotal = (v: any) => {
-    let total = 0;
+    let subtotal = 0;
     rfxBaseline.forEach(rfx => {
       const vItem = v.line_items?.find((i: any) => i.master_item_category === rfx.category && !i.is_extra);
       if (vItem && vItem.normalized_price_inr && vItem.semantic_confirmed && vItem.hitl_resolved) {
-        total += vItem.normalized_price_inr * rfx.req_qty;
+        subtotal += vItem.normalized_price_inr * rfx.req_qty;
       }
     });
     getAvailableItemsForVendor(v).forEach((i: any) => {
       if (i.normalized_price_inr && i.semantic_confirmed && i.hitl_resolved) {
-         total += i.normalized_price_inr * (Number(i.quoted_qty) || 1);
+         subtotal += i.normalized_price_inr * (Number(i.quoted_qty) || 1);
       }
     });
-    return total;
+
+    const discountPct = Number(v.commercials?.discount_pct) || 0;
+    const taxPct = Number(v.commercials?.tax_pct) || 0;
+    const shippingFlat = Number(v.commercials?.shipping_cost_flat) || 0;
+
+    const afterDiscount = subtotal - (subtotal * (discountPct / 100));
+    const afterTax = afterDiscount + (afterDiscount * (taxPct / 100));
+    const landedCost = afterTax + shippingFlat;
+
+    return landedCost;
   };
 
   const getAllExtras = () => {
@@ -205,8 +212,20 @@ export default function Dashboard() {
                   {vendorData.map((v, i) => (
                     <th key={i} className="p-3 font-normal text-xs align-top border-l border-slate-800 w-1/3">
                       <div className="font-bold text-base text-white mb-1">{v.vendor_name}</div>
+                      
+                      {/* NEW LANDED COST & SCORECARD RENDER */}
                       <div className="text-emerald-400 font-bold mb-3 text-lg">
                         ₹{calculateVendorTotal(v).toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}
+                      </div>
+                      <div className="space-y-1 mb-3 border-b border-slate-800 pb-3">
+                        {v.vendor_scorecard?.commercial_insights?.map((insight: string, idx: number) => (
+                          <div key={idx} className="text-[10px] leading-tight text-slate-300 bg-slate-800/50 p-1.5 rounded">{insight}</div>
+                        ))}
+                      </div>
+                      <div className="text-slate-400 space-y-1 text-[11px]">
+                        <div>Risk Rating: <span className="text-white">{v.vendor_scorecard?.market_risk_rating}/5.0</span></div>
+                        <div>Lead Time: <span className="text-white">{v.vendor_scorecard?.shipping_lead_time_days} days</span></div>
+                        <div>Compliance: <span className="text-white">{v.vendor_scorecard?.compliance_score}%</span></div>
                       </div>
                     </th>
                   ))}
@@ -373,6 +392,7 @@ export default function Dashboard() {
                   </tr>
                 ))}
                 
+                {/* RENDER EXTRAS & UNMAPPED AT BOTTOM */}
                 {getAllExtras().length > 0 && (
                   <>
                     <tr className="bg-slate-900/80">
@@ -426,7 +446,7 @@ export default function Dashboard() {
         </div>
         {vendorData.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
-            <button onClick={() => askCopilot("🏆 Recommend Winner", "Evaluate the vendors. Verify if all vendors quoted the complete list. Disqualify incomplete bids. Recommend winner on Total Cost.")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">🏆 Recommend Winner</button>
+            <button onClick={() => askCopilot("🏆 Recommend Winner", "Evaluate the vendors based on Total Landed Cost (which now includes shipping, taxes, and discounts). Disqualify bids that missed items or failed MOQ.")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">🏆 Recommend Winner</button>
             <button onClick={() => askCopilot("📦 Check Availability", "Which vendors are missing items from the RFx baseline?")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">📦 Check Availability</button>
           </div>
         )}
