@@ -70,7 +70,23 @@ export default function Dashboard() {
     }
   };
 
-  // Helper to find all extra items across vendors
+  // Helper to dynamically calculate total based on RFx Required Quantity
+  const calculateVendorTotal = (v: any) => {
+    let total = 0;
+    rfxBaseline.forEach(rfx => {
+      const vItem = v.line_items?.find((i: any) => i.master_item_category === rfx.category);
+      if (vItem && vItem.normalized_price_inr) {
+        total += vItem.normalized_price_inr * rfx.req_qty;
+      }
+    });
+    (v.line_items || []).forEach((i: any) => {
+      if (i.is_extra && i.normalized_price_inr) {
+         total += i.normalized_price_inr * (Number(i.quoted_qty) || 1);
+      }
+    });
+    return total;
+  };
+
   const getAllExtras = () => {
     const extras = new Set<string>();
     vendorData.forEach(v => {
@@ -114,12 +130,10 @@ export default function Dashboard() {
                   const itemUom = normalizeUom(item.quoted_uom);
                   const targetUom = rfxMatch ? normalizeUom(rfxMatch.base_uom) : "";
 
-                  // Identify the specific HITL State
                   const isUnrecognized = !rfxMatch && !item.is_extra;
                   const isSemanticGuess = rfxMatch && !isExactStringMatch && !item.semantic_confirmed;
                   const isUomMismatch = rfxMatch && item.semantic_confirmed && itemUom !== targetUom;
 
-                  // If it's mapped, confirmed, and units match, resolve it silently
                   if (rfxMatch && (isExactStringMatch || item.semantic_confirmed) && itemUom === targetUom && !item.hitl_resolved) {
                     setTimeout(() => {
                       setVendorData(prev => {
@@ -131,7 +145,6 @@ export default function Dashboard() {
                     return null;
                   }
 
-                  // STATE C: UNRECOGNIZED ITEM / SCOPE CREEP
                   if (isUnrecognized) {
                     return (
                       <div key={`${vIdx}-${iIdx}`} className="bg-slate-900 border border-purple-900/50 p-3 rounded-lg flex items-center justify-between text-sm">
@@ -149,7 +162,7 @@ export default function Dashboard() {
                               setVendorData(prev => {
                                 const newData = [...prev];
                                 newData[vIdx].line_items[iIdx].master_item_category = e.target.value;
-                                newData[vIdx].line_items[iIdx].semantic_confirmed = true; // Auto-confirm user selection
+                                newData[vIdx].line_items[iIdx].semantic_confirmed = true;
                                 return newData;
                               });
                             }}
@@ -175,7 +188,6 @@ export default function Dashboard() {
                     );
                   }
 
-                  // STATE A: SEMANTIC GUESS (Category Mismatch)
                   if (isSemanticGuess) {
                     return (
                       <div key={`${vIdx}-${iIdx}`} className="bg-slate-900 border border-amber-900/50 p-3 rounded-lg flex items-center justify-between text-sm">
@@ -202,7 +214,7 @@ export default function Dashboard() {
                             onClick={() => {
                               setVendorData(prev => {
                                 const newData = [...prev];
-                                newData[vIdx].line_items[iIdx].master_item_category = ""; // Clears it to trigger State C
+                                newData[vIdx].line_items[iIdx].master_item_category = "";
                                 return newData;
                               });
                             }}
@@ -214,7 +226,6 @@ export default function Dashboard() {
                     );
                   }
 
-                  // STATE B: PACKAGING MISMATCH (UoM Conversion)
                   if (isUomMismatch) {
                     return (
                       <div key={`${vIdx}-${iIdx}`} className="bg-slate-900 border border-blue-900/50 p-3 rounded-lg flex items-center justify-between text-sm">
@@ -254,12 +265,7 @@ export default function Dashboard() {
                                 if (freightStr.includes("ex-works") || freightStr.includes("extra")) baseRate = baseRate * 1.025;
                                 
                                 targetItem.normalized_price_inr = baseRate;
-                                targetItem.line_total_inr = baseRate * rfxMatch.req_qty; // Locks to RFx Qty
                                 targetItem.hitl_resolved = true;
-                                
-                                newData[vIdx].vendor_scorecard.total_landed_spend = newData[vIdx].line_items.reduce(
-                                  (sum: number, it: any) => sum + (it.line_total_inr || 0), 0
-                                );
                                 return newData;
                               });
                             }}
@@ -290,14 +296,13 @@ export default function Dashboard() {
                     <th key={i} className="p-3 font-normal text-xs align-top border-l border-slate-800">
                       <div className="font-bold text-base text-white mb-1">{v.vendor_name}</div>
                       <div className="text-emerald-400 font-bold mb-3 text-lg">
-                        ₹{v.vendor_scorecard.total_landed_spend.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}
+                        ₹{calculateVendorTotal(v).toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}
                       </div>
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
-                {/* 1. RENDER STRICT RFX BASELINE */}
                 {rfxBaseline.map((rfxItem, rowIdx) => (
                   <tr key={rowIdx} className="hover:bg-slate-900/50 transition">
                     <td className="p-3 align-top">
@@ -307,15 +312,46 @@ export default function Dashboard() {
                     {vendorData.map((v, colIdx) => {
                       const vItem = v.line_items?.find((i: any) => i.master_item_category === rfxItem.category);
                       
+                      // RENDER INLINE MAPPING DROPDOWN FOR MISSING ITEMS
                       if (!vItem || !vItem.normalized_price_inr) {
+                        const unmappedItems = v.line_items?.filter((i: any) => !i.master_item_category || i.is_extra) || [];
+                        
                         return (
-                          <td key={colIdx} className="p-3 border-l border-slate-800 align-top bg-red-950/20">
-                            <div className="text-xs text-red-400 font-bold tracking-wider uppercase flex items-center mt-2">
-                              <span className="mr-2">❌</span> Missing from Quote
+                          <td key={colIdx} className="p-3 border-l border-slate-800 align-top bg-red-950/10">
+                            <div className="text-[10px] text-red-400 font-bold tracking-wider uppercase mb-2">
+                              ❌ Missing
                             </div>
+                            {unmappedItems.length > 0 && (
+                              <select 
+                                className="w-full bg-slate-900/80 border border-red-500/30 text-slate-300 text-[10px] rounded p-1.5 outline-none normal-case tracking-normal"
+                                onChange={(e) => {
+                                  const desc = e.target.value;
+                                  if (!desc) return;
+                                  setVendorData(prev => {
+                                    const newData = [...prev];
+                                    const targetLine = newData[colIdx].line_items.find((i: any) => i.vendor_raw_description === desc);
+                                    if (targetLine) {
+                                      targetLine.master_item_category = rfxItem.category;
+                                      targetLine.is_extra = false;
+                                      targetLine.semantic_confirmed = true;
+                                      // Setting resolved to false forces it to the top queue if there's a unit mismatch!
+                                      targetLine.hitl_resolved = false; 
+                                    }
+                                    return newData;
+                                  });
+                                }}
+                              >
+                                <option value="">Select from quote...</option>
+                                {unmappedItems.map((ui: any, idx: number) => (
+                                  <option key={idx} value={ui.vendor_raw_description}>{ui.vendor_raw_description}</option>
+                                ))}
+                              </select>
+                            )}
                           </td>
                         );
                       }
+
+                      const hasMOQIssue = vItem.moq_required > rfxItem.req_qty;
 
                       return (
                         <td key={colIdx} className="p-3 border-l border-slate-800 align-top">
@@ -325,13 +361,13 @@ export default function Dashboard() {
                           <div className="font-semibold text-emerald-400">
                             ₹{vItem.normalized_price_inr.toFixed(2)} <span className="text-[10px] text-slate-500 font-normal">/ {rfxItem.base_uom}</span>
                           </div>
+                          {hasMOQIssue && <div className="text-[10px] text-red-500 font-bold mt-1 uppercase tracking-wider">MOQ Failed: {vItem.moq_required} req</div>}
                         </td>
                       );
                     })}
                   </tr>
                 ))}
                 
-                {/* 2. RENDER EXTRA / SCOPE CREEP ITEMS */}
                 {getAllExtras().length > 0 && (
                   <>
                     <tr className="bg-slate-900/80">
