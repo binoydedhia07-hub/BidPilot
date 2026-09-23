@@ -105,12 +105,26 @@ export default function Dashboard() {
                       <span className="block text-xs text-slate-500 mt-1">Req Qty: {item.quoted_qty}</span>
                     </td>
                     {vendorData.map((v, colIdx) => {
-                      const vItem = v.line_items[rowIdx] || {};
+                      const vItem = v.line_items[rowIdx];
+                      
+                      // Handle missing or incomplete quotes gracefully
+                      if (!vItem || !vItem.normalized_price_inr) {
+                        return (
+                          <td key={colIdx} className="p-3 border-l border-slate-800 align-top">
+                            <span className="text-xs text-slate-500 italic">No quote data</span>
+                          </td>
+                        );
+                      }
+
                       const hasMOQIssue = vItem.moq_required > item.quoted_qty;
                       return (
                         <td key={colIdx} className="p-3 border-l border-slate-800 align-top">
+                          {/* Display the vendor's extracted description so mismatches are obvious */}
+                          <div className="text-[10px] text-slate-400 mb-1 leading-tight truncate w-40" title={vItem.description}>
+                            "{vItem.description}"
+                          </div>
                           <div className={`font-semibold ${hasMOQIssue ? "text-red-400" : "text-emerald-400"}`}>
-                            ₹{vItem.normalized_price_inr?.toFixed(2) || "N/A"} <span className="text-[10px] text-slate-500 font-normal">/ unit</span>
+                            ₹{vItem.normalized_price_inr.toFixed(2)} <span className="text-[10px] text-slate-500 font-normal">/ unit</span>
                           </div>
                           {hasMOQIssue && <div className="text-[10px] text-red-500 font-bold mt-1 uppercase tracking-wider">MOQ Failed: {vItem.moq_required} req</div>}
                         </td>
@@ -137,7 +151,6 @@ export default function Dashboard() {
               <div className="text-[10px] font-bold uppercase text-slate-500 mb-2 tracking-wider">
                 {msg.role === "user" ? "Buyer" : "BidPilot"}
               </div>
-              {/* Force clean Markdown rendering from ReactMarkdown */}
               {msg.role === "user" ? msg.text : <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>}
             </div>
           ))}
@@ -147,7 +160,7 @@ export default function Dashboard() {
         {vendorData.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
             <button 
-              onClick={() => askCopilot("🏆 Recommend Winner", "Recommend the winner based strictly on Total Landed Cost. Explain why in exactly 2 sentences. Use a markdown table. Do not include any safety pre-text.")} 
+              onClick={() => askCopilot("🏆 Recommend Winner", "Evaluate the vendors. First, verify if all vendors quoted the complete list of required items. Disqualify any incomplete or anomalous bids. Then, recommend the valid winner based on Total Landed Cost.")} 
               className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700"
             >
               🏆 Recommend Winner
