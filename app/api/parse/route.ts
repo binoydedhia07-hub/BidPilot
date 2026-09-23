@@ -19,18 +19,16 @@ export async function POST(req: Request) {
     const prompt = `
       You are an expert enterprise procurement parsing engine.
       
-      CRITICAL NORMALIZATION RULES:
-      1. SEMANTIC MATCHING: Look at the item on the vendor's quote. Compare it to this strict RFx Baseline list: ${rfxCategories}. 
-         If the vendor's item is a logical match, output the EXACT RFx string in the "master_item_category" field. 
-         If it does NOT logically map, leave "master_item_category" blank ("").
-      2. EXACT DESCRIPTION: Capture the exact text written on the vendor's quote in the "vendor_raw_description" field.
-      3. UoM: Extract the stated unit of measure (e.g., Pcs, Rolls, Carton, kg).
+      CRITICAL INSTRUCTION: You MUST extract EVERY SINGLE line item, product, service, or fee listed in the quote. DO NOT omit or filter out items, even if they seem irrelevant.
       
-      CRITICAL INSTRUCTION FOR TEXT/CSV: If the input is tabular text or CSV, treat delimiters (commas, tabs) as columns.
+      NORMALIZATION RULES:
+      1. EXACT DESCRIPTION: Capture the exact text written on the vendor's quote in the "vendor_raw_description" field.
+      2. SEMANTIC MATCHING: Compare the item to this strict RFx Baseline: ${rfxCategories}. If it is a logical match, output the exact RFx string in the "master_item_category" field. If it does NOT map to the baseline, leave "master_item_category" blank ("").
+      3. UoM & MOQ: Extract the stated unit of measure (e.g., Pcs, Rolls) and any Minimum Order Quantity. If no MOQ is stated, default to 0.
       
-      YOU MUST OUTPUT STRICT, VALID JSON ONLY. NO CONVERSATIONAL TEXT. NO MARKDOWN.
+      CRITICAL FOR TEXT/CSV: Treat delimiters (commas, tabs) as tabular columns.
       
-      Return ONLY a pure valid JSON object with this exact schema:
+      Return ONLY a pure valid JSON object with this schema:
       {
         "vendor_name": "${vendorName}",
         "commercials": {
