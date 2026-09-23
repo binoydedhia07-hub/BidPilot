@@ -18,10 +18,50 @@ export default function Dashboard() {
     { category: "High Tensile Stretch Film 23mic", req_qty: 1000, base_uom: "kg" }
   ]);
 
+  // --- ROBUST UNIT NORMALIZATION & AUTO-CONVERSION ---
   const normalizeUom = (u: string) => {
-    const lower = (u || '').trim().toLowerCase();
+    let lower = (u || '').trim().toLowerCase();
     if (['pcs', 'piece', 'pieces', 'unit', 'units', 'each', 'nos', 'number', 'pp'].includes(lower)) return 'pieces';
+    if (['roll', 'rolls'].includes(lower)) return 'rolls';
+    if (['kg', 'kgs', 'kilogram', 'kilograms'].includes(lower)) return 'kg';
+    if (['g', 'gm', 'gms', 'gram', 'grams'].includes(lower)) return 'g';
+    if (['box', 'boxes'].includes(lower)) return 'boxes';
+    if (['carton', 'cartons'].includes(lower)) return 'cartons';
     return lower;
+  };
+
+  // Automatically solves standard conversions (e.g. "1000 pieces" -> divisor 1000, "kg" to "g" -> divisor 1000)
+  const attemptAutoConversion = (quoted: string, target: string) => {
+    const q = (quoted || "").toLowerCase().trim();
+    const t = normalizeUom(target);
+    const qNorm = normalizeUom(q);
+
+    // 1. Exact unit match
+    if (qNorm === t) return { match: true, multiplier: 1 };
+
+    // 2. Extracted numeric quantities (e.g. "1000 pieces")
+    const numMatch = q.match(/^([\d.,]+)\s*(.*)$/);
+    if (numMatch) {
+      const num = parseFloat(numMatch[1].replace(/,/g, ''));
+      const text = normalizeUom(numMatch[2]);
+      if (text === t) return { match: true, multiplier: num };
+    }
+
+    // 3. Standard weight conversions
+    if (qNorm === 'kg' && t === 'g') return { match: true, multiplier: 1000 };
+    if (qNorm === 'g' && t === 'kg') return { match: true, multiplier: 0.001 };
+
+    // Unsolvable (e.g., Carton to Pieces)
+    return { match: false, multiplier: 1 };
+  };
+
+  // Helper to standardise price recalculation including freight
+  const recalculateItemPrice = (item: any, vendor: any, multiplier: number) => {
+    const rawPrice = Number(item.unit_price) || 0;
+    const freightStr = (vendor.commercials?.freight_terms || "").toLowerCase();
+    let baseRate = rawPrice / multiplier;
+    if (freightStr.includes("ex-works") || freightStr.includes("extra")) baseRate *= 1.025;
+    return baseRate;
   };
 
   const handleFileUpload = async (e: any) => {
@@ -39,14 +79,34 @@ export default function Dashboard() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       
-      // Initialize items with UI tracking states
+      // Process initial states robustly
       data.line_items = (data.line_items || []).map((item: any) => {
-        const isExact = rfxBaseline.some(r => r.category.toLowerCase() === (item.vendor_raw_description || '').toLowerCase());
+        const exactMatch = rfxBaseline.find(r => r.category.toLowerCase() === (item.vendor_raw_description || '').toLowerCase());
+        const aiMatch = rfxBaseline.find(r => r.category === item.master_item_category);
+        const targetRfx = exactMatch || aiMatch;
+        
+        let semanticConfirmed = !!exactMatch; // Auto-confirm if exact string
+        let hitlResolved = false;
+        let conversionMultiplier = 1;
+        let normalizedPrice = 0;
+
+        if (semanticConfirmed && targetRfx) {
+          const autoConv = attemptAutoConversion(item.quoted_uom, targetRfx.base_uom);
+          if (autoConv.match) {
+            hitlResolved = true;
+            conversionMultiplier = autoConv.multiplier;
+            normalizedPrice = recalculateItemPrice(item, data, conversionMultiplier);
+          }
+        }
+
         return {
           ...item,
-          semantic_confirmed: isExact, // Auto-confirm if exact text match
-          hitl_resolved: false,
-          is_extra: !item.master_item_category // Treat as extra if AI left category blank
+          master_item_category: targetRfx ? targetRfx.category : "",
+          semantic_confirmed: semanticConfirmed,
+          hitl_resolved: hitlResolved,
+          conversion_multiplier: conversionMultiplier,
+          normalized_price_inr: normalizedPrice,
+          is_extra: !targetRfx // Marked as extra/unmapped if no baseline match at all
         };
       });
 
@@ -62,7 +122,6 @@ export default function Dashboard() {
   const askCopilot = async (displayMessage?: string, apiPrompt?: string) => {
     const uiText = displayMessage || question;
     const backendText = apiPrompt || displayMessage || question;
-    
     if (!uiText.trim()) return;
     
     setChatLog((prev) => [...prev, { role: "user", text: uiText, apiText: backendText }]);
@@ -82,42 +141,38 @@ export default function Dashboard() {
     }
   };
 
-  // Strictly calculates Spend = Normalized Rate * RFx Required Quantity
   const calculateVendorTotal = (v: any) => {
     let total = 0;
     rfxBaseline.forEach(rfx => {
       const vItem = v.line_items?.find((i: any) => i.master_item_category === rfx.category && !i.is_extra);
-      const isConfirmed = vItem?.semantic_confirmed || ((vItem?.vendor_raw_description || "").toLowerCase() === rfx.category.toLowerCase());
-      const uomMatches = normalizeUom(vItem?.quoted_uom || "") === normalizeUom(rfx.base_uom);
-      
-      // Only sum items that have cleared all inline HITL states
-      if (vItem && vItem.normalized_price_inr && isConfirmed && (uomMatches || vItem.hitl_resolved)) {
+      if (vItem && vItem.normalized_price_inr && vItem.semantic_confirmed && vItem.hitl_resolved) {
         total += vItem.normalized_price_inr * rfx.req_qty;
       }
     });
-    
-    // Add explicitly retained extras
     (v.line_items || []).forEach((i: any) => {
-      if (i.is_extra && i.normalized_price_inr) {
+      if (i.is_extra && i.normalized_price_inr && i.semantic_confirmed && i.hitl_resolved) {
          total += i.normalized_price_inr * (Number(i.quoted_qty) || 1);
       }
     });
     return total;
   };
 
+  // Get items not actively confirmed to any row (makes dropdowns work correctly)
+  const getAvailableItemsForVendor = (v: any) => {
+    return (v.line_items || []).filter((i: any) => !i.semantic_confirmed || i.is_extra);
+  };
+
   const getAllExtras = () => {
     const extras = new Set<string>();
     vendorData.forEach(v => {
-      v.line_items?.forEach((i: any) => {
-        if (i.is_extra) extras.add(i.vendor_raw_description);
-      });
+      getAvailableItemsForVendor(v).forEach((i: any) => extras.add(i.vendor_raw_description));
     });
     return Array.from(extras);
   };
 
   return (
     <div className="flex h-screen bg-slate-900 text-slate-100 font-sans overflow-hidden">
-      {/* LEFT: Master Grid & Scorecards */}
+      {/* LEFT: Master Grid */}
       <div className="w-2/3 p-6 flex flex-col border-r border-slate-800 overflow-hidden">
         <div className="flex justify-between items-center mb-6">
           <div>
@@ -161,7 +216,7 @@ export default function Dashboard() {
 
                       // STATE 1: MISSING & MANUAL MAP
                       if (!vItem) {
-                        const availableItems = v.line_items?.filter((i: any) => i.is_extra || !i.master_item_category) || [];
+                        const availableItems = getAvailableItemsForVendor(v);
                         return (
                           <td key={colIdx} className="p-0 border-l border-slate-800 align-top bg-red-950/10">
                             <div className="p-3 h-full flex flex-col justify-start">
@@ -178,7 +233,16 @@ export default function Dashboard() {
                                       ...vend,
                                       line_items: vend.line_items.map((it: any) => {
                                         if (it.vendor_raw_description === desc) {
-                                          return { ...it, master_item_category: rfxItem.category, is_extra: false, semantic_confirmed: true, hitl_resolved: false };
+                                          const autoConv = attemptAutoConversion(it.quoted_uom, rfxItem.base_uom);
+                                          return { 
+                                            ...it, 
+                                            master_item_category: rfxItem.category, 
+                                            is_extra: false, 
+                                            semantic_confirmed: true, 
+                                            hitl_resolved: autoConv.match,
+                                            conversion_multiplier: autoConv.multiplier,
+                                            normalized_price_inr: autoConv.match ? recalculateItemPrice(it, vend, autoConv.multiplier) : 0
+                                          };
                                         }
                                         return it;
                                       })
@@ -196,14 +260,8 @@ export default function Dashboard() {
                         );
                       }
 
-                      const isExact = (vItem.vendor_raw_description || "").toLowerCase() === rfxItem.category.toLowerCase();
-                      const isConfirmed = vItem.semantic_confirmed || isExact;
-                      const itemUom = normalizeUom(vItem.quoted_uom);
-                      const targetUom = normalizeUom(rfxItem.base_uom);
-                      const uomMatches = itemUom === targetUom;
-
                       // STATE 2: AI SEMANTIC GUESS PENDING
-                      if (!isConfirmed) {
+                      if (!vItem.semantic_confirmed) {
                         return (
                           <td key={colIdx} className="p-0 border-l border-slate-800 align-top bg-amber-950/20">
                             <div className="p-3 h-full flex flex-col justify-start border-b-2 border-amber-500/50">
@@ -211,10 +269,26 @@ export default function Dashboard() {
                               <div className="text-xs text-white mb-3 leading-tight">"{vItem.vendor_raw_description}"</div>
                               <div className="flex gap-2 mt-auto">
                                 <button 
-                                  onClick={() => setVendorData(prev => prev.map((vend, id) => id !== colIdx ? vend : { ...vend, line_items: vend.line_items.map((it: any) => it === vItem ? { ...it, semantic_confirmed: true } : it) }))}
+                                  onClick={() => setVendorData(prev => prev.map((vend, id) => {
+                                    if (id !== colIdx) return vend;
+                                    return {
+                                      ...vend,
+                                      line_items: vend.line_items.map((it: any) => {
+                                        if (it !== vItem) return it;
+                                        const autoConv = attemptAutoConversion(it.quoted_uom, rfxItem.base_uom);
+                                        return {
+                                          ...it,
+                                          semantic_confirmed: true,
+                                          hitl_resolved: autoConv.match,
+                                          conversion_multiplier: autoConv.multiplier,
+                                          normalized_price_inr: autoConv.match ? recalculateItemPrice(it, vend, autoConv.multiplier) : 0
+                                        }
+                                      })
+                                    }
+                                  }))}
                                   className="bg-emerald-600/20 text-emerald-400 border border-emerald-600/30 hover:bg-emerald-600/40 text-[10px] px-2 py-1.5 rounded w-full transition">Confirm</button>
                                 <button 
-                                  onClick={() => setVendorData(prev => prev.map((vend, id) => id !== colIdx ? vend : { ...vend, line_items: vend.line_items.map((it: any) => it === vItem ? { ...it, master_item_category: "", is_extra: true } : it) }))}
+                                  onClick={() => setVendorData(prev => prev.map((vend, id) => id !== colIdx ? vend : { ...vend, line_items: vend.line_items.map((it: any) => it === vItem ? { ...it, master_item_category: "", is_extra: true, semantic_confirmed: false } : it) }))}
                                   className="bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 text-[10px] px-2 py-1.5 rounded w-full transition">Reject</button>
                               </div>
                             </div>
@@ -223,7 +297,7 @@ export default function Dashboard() {
                       }
 
                       // STATE 3: UOM CONVERSION PENDING
-                      if (!uomMatches && !vItem.hitl_resolved) {
+                      if (!vItem.hitl_resolved) {
                         return (
                           <td key={colIdx} className="p-0 border-l border-slate-800 align-top bg-blue-950/20">
                             <div className="p-3 h-full flex flex-col justify-start border-b-2 border-blue-500/50">
@@ -250,11 +324,7 @@ export default function Dashboard() {
                                       ...vend,
                                       line_items: vend.line_items.map((it: any) => {
                                         if (it !== vItem) return it;
-                                        const rawPrice = Number(it.unit_price) || 0;
-                                        const freightStr = (vend.commercials?.freight_terms || "").toLowerCase();
-                                        let baseRate = rawPrice / (it.conversion_multiplier || 1);
-                                        if (freightStr.includes("ex-works") || freightStr.includes("extra")) baseRate *= 1.025;
-                                        return { ...it, normalized_price_inr: baseRate, hitl_resolved: true };
+                                        return { ...it, normalized_price_inr: recalculateItemPrice(it, vend, it.conversion_multiplier || 1), hitl_resolved: true };
                                       })
                                     };
                                   }));
@@ -272,7 +342,6 @@ export default function Dashboard() {
                       return (
                         <td key={colIdx} className="p-0 border-l border-slate-800 align-top group relative">
                           <div className="p-3 h-full flex flex-col justify-start">
-                            {/* Unlink Button appears on Hover */}
                             <button 
                               title="Unmap this item"
                               onClick={() => {
@@ -281,14 +350,13 @@ export default function Dashboard() {
                               className="absolute top-2 right-2 text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition text-xs font-bold">
                               ✕
                             </button>
-
                             <div className="text-[10px] text-slate-400 mb-1 leading-tight w-11/12 pr-4" title={vItem.vendor_raw_description}>
                               "{vItem.vendor_raw_description}"
                             </div>
                             <div className="font-semibold text-emerald-400">
                               ₹{vItem.normalized_price_inr?.toFixed(2) || 0} <span className="text-[10px] text-slate-500 font-normal">/ {rfxItem.base_uom}</span>
                             </div>
-                            {hasMOQIssue && <div className="text-[10px] text-red-500 font-bold mt-2 uppercase tracking-wider">⚠️ MOQ Failed: {vItem.moq_required}</div>}
+                            {hasMOQIssue && <div className="text-[10px] text-red-500 font-bold mt-2 uppercase tracking-wider">⚠️ MOQ Failed: {vItem.moq_required} req</div>}
                           </div>
                         </td>
                       );
@@ -296,7 +364,7 @@ export default function Dashboard() {
                   </tr>
                 ))}
                 
-                {/* RENDER EXTRAS & UNMAPPED */}
+                {/* RENDER EXTRAS & UNMAPPED AT BOTTOM */}
                 {getAllExtras().length > 0 && (
                   <>
                     <tr className="bg-slate-900/80">
@@ -311,9 +379,8 @@ export default function Dashboard() {
                           <div className="text-[10px] text-slate-600 mt-1 uppercase tracking-wider">Awaiting Assignment</div>
                         </td>
                         {vendorData.map((v, colIdx) => {
-                          const vItem = v.line_items?.find((i: any) => i.vendor_raw_description === extraDesc && i.is_extra);
+                          const vItem = v.line_items?.find((i: any) => i.vendor_raw_description === extraDesc && (!i.semantic_confirmed || i.is_extra));
                           if (!vItem) return <td key={colIdx} className="p-3 border-l border-slate-800" />;
-                          
                           return (
                             <td key={colIdx} className="p-3 border-l border-slate-800 align-top">
                               <div className="font-semibold text-purple-400">
@@ -338,7 +405,6 @@ export default function Dashboard() {
           <h2 className="text-lg font-bold text-white">BidPilot AI</h2>
           <p className="text-xs text-slate-400">Strict enterprise guardrails active</p>
         </div>
-
         <div className="flex-1 overflow-auto space-y-4 mb-4 pr-1">
           {chatLog.map((msg, i) => (
             <div key={i} className={`p-4 rounded-lg text-sm ${msg.role === "user" ? "bg-blue-600/20 border border-blue-500/30 text-blue-100 ml-4" : "bg-slate-900 border border-slate-800 text-slate-200 mr-2 prose prose-invert prose-sm max-w-none"}`}>
@@ -349,38 +415,15 @@ export default function Dashboard() {
             </div>
           ))}
         </div>
-
         {vendorData.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
-            <button 
-              onClick={() => askCopilot("🏆 Recommend Winner", "Evaluate the vendors. First, verify if all vendors quoted the complete list of required items. Disqualify any incomplete or anomalous bids. Then, recommend the valid winner based on Total Landed Cost.")} 
-              className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700"
-            >
-              🏆 Recommend Winner
-            </button>
-            <button 
-              onClick={() => askCopilot("📦 Check Availability", "Cross-reference the vendors against the RFx baseline. Which vendors are missing items from the required baseline?")} 
-              className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700"
-            >
-              📦 Check Availability
-            </button>
+            <button onClick={() => askCopilot("🏆 Recommend Winner", "Evaluate the vendors. Verify if all vendors quoted the complete list. Disqualify incomplete bids. Recommend winner on Total Cost.")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">🏆 Recommend Winner</button>
+            <button onClick={() => askCopilot("📦 Check Availability", "Which vendors are missing items from the RFx baseline?")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">📦 Check Availability</button>
           </div>
         )}
-
         <div className="flex gap-2">
-          <input 
-            className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500" 
-            value={question} 
-            onChange={(e) => setQuestion(e.target.value)} 
-            onKeyDown={(e) => e.key === "Enter" && askCopilot()} 
-            placeholder="Ask BidPilot..." 
-          />
-          <button 
-            onClick={() => askCopilot()} 
-            className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition"
-          >
-            Send
-          </button>
+          <input className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:border-blue-500" value={question} onChange={(e) => setQuestion(e.target.value)} onKeyDown={(e) => e.key === "Enter" && askCopilot()} placeholder="Ask BidPilot..." />
+          <button onClick={() => askCopilot()} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition">Send</button>
         </div>
       </div>
     </div>
