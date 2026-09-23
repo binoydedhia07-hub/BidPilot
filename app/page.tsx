@@ -69,6 +69,83 @@ export default function Dashboard() {
           </label>
         </div>
 
+        {/* --- HITL AMBIGUITY RESOLUTION QUEUE --- */}
+        {vendorData.length > 0 && vendorData.some(v => 
+          v.line_items?.some((item: any) => item.quoted_uom && !['pcs', 'unit', 'each'].includes(item.quoted_uom.toLowerCase()))
+        ) && (
+          <div className="mb-6 bg-amber-950/40 border border-amber-800/50 rounded-xl p-4 shadow-lg">
+            <h3 className="text-amber-500 font-bold text-sm mb-3 flex items-center">
+              <span className="mr-2">⚠️</span> HITL Review: Ambiguous Packaging Terms Detected
+            </h3>
+            <div className="space-y-2">
+              {vendorData.map((v, vIdx) => 
+                v.line_items?.map((item: any, iIdx: number) => {
+                  // Flag if the UoM is not a standard individual piece
+                  const isAmbiguous = item.quoted_uom && !['pcs', 'unit', 'each'].includes(item.quoted_uom.toLowerCase());
+                  if (!isAmbiguous) return null;
+
+                  return (
+                    <div key={`${vIdx}-${iIdx}`} className="flex items-center justify-between text-xs bg-slate-900/60 p-3 rounded border border-amber-900/30">
+                      <div className="w-1/3 text-slate-300 truncate pr-4">
+                        <span className="font-bold text-white">{v.vendor_name}</span>
+                        <br/>
+                        <span className="text-slate-500">"{item.vendor_raw_description || item.description}"</span>
+                      </div>
+                      
+                      <div className="flex-1 flex items-center gap-4">
+                        <div>
+                          <span className="text-slate-500 block text-[10px] uppercase tracking-wider mb-1">AI Extracted UoM</span> 
+                          <span className="bg-slate-800 px-2 py-1 rounded text-amber-200 font-medium">{item.quoted_uom}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 block text-[10px] uppercase tracking-wider mb-1">Set Units Per Pack</span>
+                          <input 
+                            type="number" 
+                            min="1"
+                            className="bg-slate-950 border border-amber-700/50 rounded px-3 py-1 w-24 text-white focus:border-amber-500 outline-none transition"
+                            value={item.units_per_pack || 1}
+                            onChange={(e) => {
+                              const newMultiplier = Number(e.target.value) || 1;
+                              setVendorData((prev) => {
+                                const newData = [...prev];
+                                const targetItem = newData[vIdx].line_items[iIdx];
+                                targetItem.units_per_pack = newMultiplier;
+                                
+                                // Recalculate normalized price deterministically 
+                                const rawPrice = Number(targetItem.unit_price) || 0;
+                                const freightStr = (newData[vIdx].commercials?.freight_terms || "").toLowerCase();
+                                
+                                let baseRate = rawPrice / newMultiplier;
+                                if (freightStr.includes("ex-works") || freightStr.includes("extra")) {
+                                  baseRate = baseRate * 1.025; // Re-apply 2.5% freight buffer
+                                }
+                                
+                                targetItem.normalized_price_inr = baseRate;
+                                targetItem.line_total_inr = baseRate * (Number(targetItem.quoted_qty) || 1);
+                                
+                                // Recalculate the vendor's total landed spend based on the human correction
+                                newData[vIdx].vendor_scorecard.total_landed_spend = newData[vIdx].line_items.reduce(
+                                  (sum: number, it: any) => sum + (it.line_total_inr || 0), 0
+                                );
+                                
+                                return newData;
+                              });
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <button className="text-amber-500 hover:text-amber-400 hover:bg-amber-500/10 px-4 py-1.5 rounded transition border border-amber-500/20">
+                        Confirm & Recalculate
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+        {/* ------------------------------------------- */}
+
         <div className="flex-1 overflow-auto bg-slate-950 rounded-xl border border-slate-800 p-4">
           {vendorData.length === 0 ? (
             <div className="h-full flex items-center justify-center text-slate-500">Upload a quote to populate the evaluation matrix.</div>
