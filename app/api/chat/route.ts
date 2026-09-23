@@ -7,31 +7,26 @@ export async function POST(req: Request) {
     if (!apiKey) throw new Error("OPENROUTER_API_KEY is missing in Vercel.");
 
     const openai = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey });
-    
-    // 1. EXTRACT RFX BASELINE HERE
     const { question, context, rfxBaseline, chatLog } = await req.json();
 
-   const systemPrompt = `
+    const systemPrompt = `
       # CONTEXT
       You are BidPilot, an enterprise procurement AI evaluating vendor responses. 
-      You are advising a corporate buyer. You must remain impartial, analytical, and extremely concise.
+      You are advising a corporate buyer. You must remain impartial, analytical, and heavily quantitative.
 
       # RFX BASELINE (WHAT THE BUYER REQUESTED)
       ${JSON.stringify(rfxBaseline, null, 2)}
 
-      # VENDOR MASTER DATA (WHAT THE VENDORS QUOTED)
+      # VENDOR MASTER DATA
       ${JSON.stringify(context, null, 2)}
 
       # STRICT EVALUATION RULES
-      1. DISQUALIFICATION BY SCOPE: A vendor is immediately DISQUALIFIED if they did not quote every single item requested in the RFx Baseline.
-      2. DISQUALIFICATION BY MOQ: A vendor is immediately DISQUALIFIED if any quoted item has an "moq_required" strictly greater than the RFx "req_qty". 
-      3. RECOMMENDATION LIMIT: If ALL vendors are disqualified, state "NO VALID VENDORS" in bold and DO NOT recommend a winner. If valid vendors exist, recommend the one with the lowest Total Landed Cost.
-
-      # FORMATTING
-      - Be brutally concise. Maximum 4-5 sentences outside of tables.
-      - ALWAYS use Markdown tables to compare vendors or list missing items.
-      - Never use conversational filler like "Here is the analysis."
+      1. RECOMMENDATION: When asked to recommend a winner, you MUST calculate and compare the Total Landed Cost (which includes their base price, discounts, taxes, and shipping). 
+      2. RECOMMEND THE LOWEST COST: Recommend the vendor with the lowest Total Landed Cost. Note any missing items or MOQ failures as "Risks", but do not automatically disqualify them unless instructed.
+      3. FORMATTING: You MUST format your comparisons using strict Markdown tables (e.g., | Vendor | Landed Cost | Missing Items | Risk |).
+      4. CONCISENESS: Output ONLY the table and a 2-sentence executive summary. No conversational filler.
     `;
+
     const messages = [
       { role: "system", content: systemPrompt },
       ...(chatLog || []).map((msg: any) => ({
@@ -42,11 +37,15 @@ export async function POST(req: Request) {
     ];
 
     const completion = await openai.chat.completions.create({
-      model: "openrouter/free", // Or your preferred chat model
+      model: "openrouter/free",
       messages: messages as any,
     });
 
-    const reply = completion.choices[0]?.message?.content || "No response generated.";
+    let reply = completion.choices[0]?.message?.content || "No response generated.";
+    
+    // STRIP API ARTIFACTS
+    reply = reply.replace(/User Safety:.*?Response Safety:.*?(\n|$)/gi, "").trim();
+
     return NextResponse.json({ text: reply });
 
   } catch (err: any) {
