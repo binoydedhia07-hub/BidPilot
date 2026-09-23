@@ -89,7 +89,7 @@ export async function POST(req: Request) {
     const cleanJson = rawText.replace(/```json|```/g, "").trim();
     const parsedData = JSON.parse(cleanJson);
 
-    // TCO Normalization & Scorecard Engine
+    // TCO Normalization & Scorecard Engine (Replace existing scorecard generation with this)
     const baseCurrency = parsedData.commercials?.currency?.toUpperCase() || "INR";
     let totalVendorSpend = 0;
     
@@ -119,15 +119,20 @@ export async function POST(req: Request) {
       };
     });
 
+    // Generate Commercial Insights
+    const pTerms = Number(parsedData.commercials?.payment_terms_days) || 0;
+    const fTerms = (parsedData.commercials?.freight_terms || "").toLowerCase();
+    let insights = [];
+    if (pTerms === 0) insights.push("⚠️ High Risk: Advance payment requested. Impacts working capital.");
+    else if (pTerms >= 30) insights.push(`✅ Positive Cashflow: Favorable Net ${pTerms} terms.`);
+    
+    if (fTerms.includes("ex-works") || fTerms.includes("extra")) insights.push("⚠️ Hidden Cost: Freight is extra. TCO engine added +2.5% buffer.");
+    else insights.push("✅ Standardized: Freight included in base cost.");
+
     parsedData.vendor_scorecard = {
       shipping_lead_time_days: Math.floor(Math.random() * 20) + 5,
       compliance_score: Math.floor(Math.random() * 15) + 85,
       market_risk_rating: (Math.random() * 1.5 + 3.5).toFixed(1),
-      total_landed_spend: totalVendorSpend
+      total_landed_spend: totalVendorSpend,
+      commercial_insights: insights
     };
-
-    return NextResponse.json(parsedData);
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
-  }
-}
