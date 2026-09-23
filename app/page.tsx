@@ -70,11 +70,10 @@ export default function Dashboard() {
     }
   };
 
-  // Helper to dynamically calculate total based on RFx Required Quantity
   const calculateVendorTotal = (v: any) => {
     let total = 0;
     rfxBaseline.forEach(rfx => {
-      const vItem = v.line_items?.find((i: any) => i.master_item_category === rfx.category);
+      const vItem = v.line_items?.find((i: any) => i.master_item_category === rfx.category && !i.is_extra);
       if (vItem && vItem.normalized_price_inr) {
         total += vItem.normalized_price_inr * rfx.req_qty;
       }
@@ -87,11 +86,19 @@ export default function Dashboard() {
     return total;
   };
 
+  // An item is "unmapped" if its category doesn't perfectly match the baseline, OR if it's explicitly marked as extra
+  const getUnmappedItemsForVendor = (v: any) => {
+    return v.line_items?.filter((i: any) => {
+      const isLockedToRfx = rfxBaseline.some(r => r.category === i.master_item_category && !i.is_extra);
+      return !isLockedToRfx;
+    }) || [];
+  };
+
   const getAllExtras = () => {
     const extras = new Set<string>();
     vendorData.forEach(v => {
-      v.line_items?.forEach((i: any) => {
-        if (i.is_extra) extras.add(i.vendor_raw_description);
+      getUnmappedItemsForVendor(v).forEach((i: any) => {
+        extras.add(i.vendor_raw_description);
       });
     });
     return Array.from(extras);
@@ -111,8 +118,17 @@ export default function Dashboard() {
           </label>
         </div>
 
-        {/* --- STATE-BASED HITL QUEUE --- */}
-        {vendorData.length > 0 && vendorData.some(v => v.line_items?.some((i: any) => !i.hitl_resolved && (!rfxBaseline.find(r => r.category === i.master_item_category) || !i.semantic_confirmed || normalizeUom(i.quoted_uom) !== normalizeUom(rfxBaseline.find(r => r.category === i.master_item_category)?.base_uom || "")))) && (
+        {/* --- STATE-BASED HITL QUEUE (ONLY TRIGGERS FOR UNIT MISMATCH OR AI GUESS) --- */}
+        {vendorData.length > 0 && vendorData.some(v => v.line_items?.some((i: any) => {
+          const rfxMatch = rfxBaseline.find(r => r.category === i.master_item_category && !i.is_extra);
+          if (!rfxMatch || i.hitl_resolved) return false;
+          
+          const isExactString = (i.vendor_raw_description || "").toLowerCase() === rfxMatch.category.toLowerCase();
+          const itemUom = normalizeUom(i.quoted_uom);
+          const targetUom = normalizeUom(rfxMatch.base_uom);
+          
+          return (!isExactString && !i.semantic_confirmed) || (i.semantic_confirmed && itemUom !== targetUom);
+        })) && (
           <div className="mb-6 bg-slate-950 border border-slate-800 rounded-xl p-4 shadow-lg">
             <h3 className="text-white font-bold text-sm mb-3 flex items-center">
               <span className="mr-2 text-blue-500">⚡</span> Action Required: Resolve Quote Ambiguities
@@ -121,71 +137,25 @@ export default function Dashboard() {
             <div className="space-y-3 max-h-60 overflow-y-auto pr-2">
               {vendorData.map((v, vIdx) => {
                 return v.line_items?.map((item: any, iIdx: number) => {
-                  if (item.hitl_resolved) return null;
+                  if (item.hitl_resolved || item.is_extra) return null;
 
-                  const currentCat = item.master_item_category || "";
-                  const rfxMatch = rfxBaseline.find(r => r.category === currentCat);
-                  const isExactStringMatch = (item.vendor_raw_description || "").toLowerCase() === currentCat.toLowerCase();
-                  
+                  const rfxMatch = rfxBaseline.find(r => r.category === item.master_item_category);
+                  if (!rfxMatch) return null;
+
+                  const isExactString = (item.vendor_raw_description || "").toLowerCase() === rfxMatch.category.toLowerCase();
                   const itemUom = normalizeUom(item.quoted_uom);
-                  const targetUom = rfxMatch ? normalizeUom(rfxMatch.base_uom) : "";
+                  const targetUom = normalizeUom(rfxMatch.base_uom);
 
-                  const isUnrecognized = !rfxMatch && !item.is_extra;
-                  const isSemanticGuess = rfxMatch && !isExactStringMatch && !item.semantic_confirmed;
-                  const isUomMismatch = rfxMatch && item.semantic_confirmed && itemUom !== targetUom;
+                  const isSemanticGuess = !isExactString && !item.semantic_confirmed;
+                  const isUomMismatch = item.semantic_confirmed && itemUom !== targetUom;
 
-                  if (rfxMatch && (isExactStringMatch || item.semantic_confirmed) && itemUom === targetUom && !item.hitl_resolved) {
+                  if (isExactString && itemUom === targetUom && !item.hitl_resolved) {
                     setTimeout(() => {
-                      setVendorData(prev => {
-                        const newData = [...prev];
-                        newData[vIdx].line_items[iIdx].hitl_resolved = true;
-                        return newData;
-                      });
+                      setVendorData(prev => prev.map((vend, id) => id !== vIdx ? vend : {
+                        ...vend, line_items: vend.line_items.map((it: any, iid) => iid !== iIdx ? it : { ...it, hitl_resolved: true })
+                      }));
                     }, 0);
                     return null;
-                  }
-
-                  if (isUnrecognized) {
-                    return (
-                      <div key={`${vIdx}-${iIdx}`} className="bg-slate-900 border border-purple-900/50 p-3 rounded-lg flex items-center justify-between text-sm">
-                        <div className="flex-1 pr-4">
-                          <span className="text-purple-400 font-bold text-xs uppercase tracking-wider block mb-1">[➕ Unrecognized Item]</span>
-                          <span className="text-slate-400">{v.vendor_name} quoted </span>
-                          <span className="text-white font-medium">"{item.vendor_raw_description}"</span>
-                          <span className="text-slate-400"> which is not in the RFx.</span>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <select 
-                            className="bg-slate-950 border border-slate-700 text-slate-200 text-xs rounded px-3 py-2 outline-none focus:border-purple-500"
-                            onChange={(e) => {
-                              if (!e.target.value) return;
-                              setVendorData(prev => {
-                                const newData = [...prev];
-                                newData[vIdx].line_items[iIdx].master_item_category = e.target.value;
-                                newData[vIdx].line_items[iIdx].semantic_confirmed = true;
-                                return newData;
-                              });
-                            }}
-                          >
-                            <option value="">Map to RFx Item...</option>
-                            {rfxBaseline.map(r => <option key={r.category} value={r.category}>{r.category}</option>)}
-                          </select>
-                          <span className="text-slate-600 text-xs font-medium">OR</span>
-                          <button 
-                            onClick={() => {
-                              setVendorData(prev => {
-                                const newData = [...prev];
-                                newData[vIdx].line_items[iIdx].is_extra = true;
-                                newData[vIdx].line_items[iIdx].hitl_resolved = true;
-                                return newData;
-                              });
-                            }}
-                            className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-4 py-2 rounded transition border border-slate-700">
-                            Add as Extra Item
-                          </button>
-                        </div>
-                      </div>
-                    );
                   }
 
                   if (isSemanticGuess) {
@@ -201,22 +171,18 @@ export default function Dashboard() {
                         <div className="flex items-center gap-2">
                           <button 
                             onClick={() => {
-                              setVendorData(prev => {
-                                const newData = [...prev];
-                                newData[vIdx].line_items[iIdx].semantic_confirmed = true;
-                                return newData;
-                              });
+                              setVendorData(prev => prev.map((vend, id) => id !== vIdx ? vend : {
+                                ...vend, line_items: vend.line_items.map((it: any, iid) => iid !== iIdx ? it : { ...it, semantic_confirmed: true })
+                              }));
                             }}
                             className="bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-400 border border-emerald-600/30 text-xs px-4 py-2 rounded transition font-medium">
                             Yes, Confirm
                           </button>
                           <button 
                             onClick={() => {
-                              setVendorData(prev => {
-                                const newData = [...prev];
-                                newData[vIdx].line_items[iIdx].master_item_category = "";
-                                return newData;
-                              });
+                              setVendorData(prev => prev.map((vend, id) => id !== vIdx ? vend : {
+                                ...vend, line_items: vend.line_items.map((it: any, iid) => iid !== iIdx ? it : { ...it, master_item_category: "", is_extra: true })
+                              }));
                             }}
                             className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-4 py-2 rounded transition border border-slate-700">
                             No, Re-map
@@ -245,29 +211,39 @@ export default function Dashboard() {
                               value={item.conversion_multiplier || 1}
                               onChange={(e) => {
                                 const newMultiplier = Number(e.target.value) || 1;
-                                setVendorData(prev => {
-                                  const newData = [...prev];
-                                  newData[vIdx].line_items[iIdx].conversion_multiplier = newMultiplier;
-                                  return newData;
-                                });
+                                setVendorData(prev => prev.map((vend, id) => id !== vIdx ? vend : {
+                                  ...vend, line_items: vend.line_items.map((it: any, iid) => iid !== iIdx ? it : { ...it, conversion_multiplier: newMultiplier })
+                                }));
                               }}
                             />
                           </div>
                           <button 
                             onClick={() => {
-                              setVendorData(prev => {
-                                const newData = [...prev];
-                                const targetItem = newData[vIdx].line_items[iIdx];
-                                const rawPrice = Number(targetItem.unit_price) || 0;
-                                const freightStr = (newData[vIdx].commercials?.freight_terms || "").toLowerCase();
-                                
-                                let baseRate = rawPrice / (targetItem.conversion_multiplier || 1);
-                                if (freightStr.includes("ex-works") || freightStr.includes("extra")) baseRate = baseRate * 1.025;
-                                
-                                targetItem.normalized_price_inr = baseRate;
-                                targetItem.hitl_resolved = true;
-                                return newData;
-                              });
+                              setVendorData(prev => prev.map((vend, id) => {
+                                if (id !== vIdx) return vend;
+                                const newLines = vend.line_items.map((it: any, iid) => {
+                                  if (iid !== iIdx) return it;
+                                  const rawPrice = Number(it.unit_price) || 0;
+                                  const freightStr = (vend.commercials?.freight_terms || "").toLowerCase();
+                                  let baseRate = rawPrice / (it.conversion_multiplier || 1);
+                                  if (freightStr.includes("ex-works") || freightStr.includes("extra")) baseRate = baseRate * 1.025;
+                                  
+                                  return { 
+                                    ...it, 
+                                    normalized_price_inr: baseRate, 
+                                    line_total_inr: baseRate * rfxMatch.req_qty, 
+                                    hitl_resolved: true 
+                                  };
+                                });
+                                return {
+                                  ...vend,
+                                  line_items: newLines,
+                                  vendor_scorecard: {
+                                    ...vend.vendor_scorecard,
+                                    total_landed_spend: newLines.reduce((sum: number, it: any) => sum + (it.line_total_inr || 0), 0)
+                                  }
+                                };
+                              }));
                             }}
                             className="bg-blue-600 hover:bg-blue-500 text-white text-xs px-4 py-2 rounded transition font-medium">
                             Recalculate
@@ -276,7 +252,6 @@ export default function Dashboard() {
                       </div>
                     );
                   }
-
                   return null;
                 });
               })}
@@ -310,11 +285,11 @@ export default function Dashboard() {
                       <div className="text-xs text-slate-500 mt-1">RFx Target: {rfxItem.req_qty} {rfxItem.base_uom}</div>
                     </td>
                     {vendorData.map((v, colIdx) => {
-                      const vItem = v.line_items?.find((i: any) => i.master_item_category === rfxItem.category);
+                      const vItem = v.line_items?.find((i: any) => i.master_item_category === rfxItem.category && !i.is_extra);
                       
-                      // RENDER INLINE MAPPING DROPDOWN FOR MISSING ITEMS
+                      // IF NOT MAPPED YET
                       if (!vItem || !vItem.normalized_price_inr) {
-                        const unmappedItems = v.line_items?.filter((i: any) => !i.master_item_category || i.is_extra) || [];
+                        const unmappedItems = getUnmappedItemsForVendor(v);
                         
                         return (
                           <td key={colIdx} className="p-3 border-l border-slate-800 align-top bg-red-950/10">
@@ -327,18 +302,26 @@ export default function Dashboard() {
                                 onChange={(e) => {
                                   const desc = e.target.value;
                                   if (!desc) return;
-                                  setVendorData(prev => {
-                                    const newData = [...prev];
-                                    const targetLine = newData[colIdx].line_items.find((i: any) => i.vendor_raw_description === desc);
-                                    if (targetLine) {
-                                      targetLine.master_item_category = rfxItem.category;
-                                      targetLine.is_extra = false;
-                                      targetLine.semantic_confirmed = true;
-                                      // Setting resolved to false forces it to the top queue if there's a unit mismatch!
-                                      targetLine.hitl_resolved = false; 
-                                    }
-                                    return newData;
-                                  });
+                                  
+                                  // IMMUTABLE DEEP UPDATE
+                                  setVendorData(prev => prev.map((vend, id) => {
+                                    if (id !== colIdx) return vend;
+                                    return {
+                                      ...vend,
+                                      line_items: vend.line_items.map((it: any) => {
+                                        if (it.vendor_raw_description === desc) {
+                                          return {
+                                            ...it,
+                                            master_item_category: rfxItem.category,
+                                            is_extra: false,
+                                            semantic_confirmed: true,
+                                            hitl_resolved: false // Triggers unit mismatch queue if needed
+                                          };
+                                        }
+                                        return it;
+                                      })
+                                    };
+                                  }));
                                 }}
                               >
                                 <option value="">Select from quote...</option>
@@ -351,11 +334,33 @@ export default function Dashboard() {
                         );
                       }
 
+                      // IF MAPPED SUCCESSFULLY
                       const hasMOQIssue = vItem.moq_required > rfxItem.req_qty;
 
                       return (
-                        <td key={colIdx} className="p-3 border-l border-slate-800 align-top">
-                          <div className="text-[10px] text-slate-400 mb-1 leading-tight truncate w-40" title={vItem.vendor_raw_description}>
+                        <td key={colIdx} className="p-3 border-l border-slate-800 align-top relative group">
+                          {/* UNLINK BUTTON (Shows on hover) */}
+                          <button 
+                            title="Unmap this item"
+                            onClick={() => {
+                              setVendorData(prev => prev.map((vend, id) => {
+                                if (id !== colIdx) return vend;
+                                return {
+                                  ...vend,
+                                  line_items: vend.line_items.map((it: any) => {
+                                    if (it.vendor_raw_description === vItem.vendor_raw_description) {
+                                      return { ...it, master_item_category: "", is_extra: true, semantic_confirmed: false, hitl_resolved: false };
+                                    }
+                                    return it;
+                                  })
+                                };
+                              }));
+                            }}
+                            className="absolute top-2 right-2 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition">
+                            ✕
+                          </button>
+                          
+                          <div className="text-[10px] text-slate-400 mb-1 leading-tight w-36" title={vItem.vendor_raw_description}>
                             "{vItem.vendor_raw_description}"
                           </div>
                           <div className="font-semibold text-emerald-400">
@@ -368,21 +373,23 @@ export default function Dashboard() {
                   </tr>
                 ))}
                 
+                {/* RENDER EXTRAS / UNMAPPED AT BOTTOM */}
                 {getAllExtras().length > 0 && (
                   <>
                     <tr className="bg-slate-900/80">
                       <td colSpan={vendorData.length + 1} className="p-3 text-xs font-bold text-purple-400 uppercase tracking-wider border-t-2 border-slate-700">
-                        Additional / Unrequested Items
+                        Additional / Unmapped Items
                       </td>
                     </tr>
                     {getAllExtras().map((extraDesc, rowIdx) => (
                       <tr key={`extra-${rowIdx}`} className="hover:bg-slate-900/50 transition">
                         <td className="p-3 align-top">
                           <div className="font-medium text-slate-400">{extraDesc}</div>
-                          <div className="text-xs text-slate-600 mt-1">Added by Vendor</div>
+                          <div className="text-xs text-slate-600 mt-1">Awaiting Assignment</div>
                         </td>
                         {vendorData.map((v, colIdx) => {
-                          const vItem = v.line_items?.find((i: any) => i.vendor_raw_description === extraDesc && i.is_extra);
+                          const vItem = v.line_items?.find((i: any) => i.vendor_raw_description === extraDesc && (!rfxBaseline.some(r => r.category === i.master_item_category) || i.is_extra));
+                          
                           if (!vItem) return <td key={colIdx} className="p-3 border-l border-slate-800" />;
                           
                           return (
@@ -420,6 +427,24 @@ export default function Dashboard() {
             </div>
           ))}
         </div>
+
+        {/* RESTORED PROMPT CHIPS */}
+        {vendorData.length > 0 && (
+          <div className="mb-3 flex flex-wrap gap-2">
+            <button 
+              onClick={() => askCopilot("🏆 Recommend Winner", "Evaluate the vendors. First, verify if all vendors quoted the complete list of required items. Disqualify any incomplete or anomalous bids. Then, recommend the valid winner based on Total Landed Cost.")} 
+              className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700"
+            >
+              🏆 Recommend Winner
+            </button>
+            <button 
+              onClick={() => askCopilot("📦 Check Availability", "Cross-reference the vendors against the RFx baseline. Which vendors are missing items from the required baseline?")} 
+              className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700"
+            >
+              📦 Check Availability
+            </button>
+          </div>
+        )}
 
         <div className="flex gap-2">
           <input 
