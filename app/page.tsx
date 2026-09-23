@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 
 export default function Dashboard() {
   const [vendorData, setVendorData] = useState<any[]>([]);
-  const [chatLog, setChatLog] = useState<{ role: string; text: string }[]>([]);
+  const [chatLog, setChatLog] = useState<{ role: string; text: string; apiText?: string }[]>([]);
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -31,18 +31,20 @@ export default function Dashboard() {
     }
   };
 
-  const askCopilot = async (overrideQuestion?: string) => {
-    const q = overrideQuestion || question;
-    if (!q.trim()) return;
+  const askCopilot = async (displayMessage?: string, apiPrompt?: string) => {
+    const uiText = displayMessage || question;
+    const backendText = apiPrompt || displayMessage || question;
     
-    setChatLog((prev) => [...prev, { role: "user", text: q }]);
+    if (!uiText.trim()) return;
+    
+    setChatLog((prev) => [...prev, { role: "user", text: uiText, apiText: backendText }]);
     setQuestion("");
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q, context: vendorData, chatLog })
+        body: JSON.stringify({ question: backendText, context: vendorData, chatLog })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -135,6 +137,7 @@ export default function Dashboard() {
               <div className="text-[10px] font-bold uppercase text-slate-500 mb-2 tracking-wider">
                 {msg.role === "user" ? "Buyer" : "BidPilot"}
               </div>
+              {/* Force clean Markdown rendering from ReactMarkdown */}
               {msg.role === "user" ? msg.text : <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>}
             </div>
           ))}
@@ -143,18 +146,35 @@ export default function Dashboard() {
         {/* Prompt Chips in Chat Area */}
         {vendorData.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
-            <button onClick={() => askCopilot("Recommend the winner based strictly on Total Landed Cost and explain why in 2 sentences.")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">
+            <button 
+              onClick={() => askCopilot("🏆 Recommend Winner", "Recommend the winner based strictly on Total Landed Cost. Explain why in exactly 2 sentences. Use a markdown table. Do not include any safety pre-text.")} 
+              className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700"
+            >
               🏆 Recommend Winner
             </button>
-            <button onClick={() => askCopilot("Identify the biggest commercial risk among these vendors.")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">
+            <button 
+              onClick={() => askCopilot("⚠️ Analyze Risks", "Identify the biggest commercial risk among these vendors based on their lead times and payment terms. Keep it under 3 sentences.")} 
+              className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700"
+            >
               ⚠️ Analyze Risks
             </button>
           </div>
         )}
 
         <div className="flex gap-2">
-          <input className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500" value={question} onChange={(e) => setQuestion(e.target.value)} onKeyDown={(e) => e.key === "Enter" && askCopilot()} placeholder="Ask BidPilot..." />
-          <button onClick={() => askCopilot()} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition">Send</button>
+          <input 
+            className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500" 
+            value={question} 
+            onChange={(e) => setQuestion(e.target.value)} 
+            onKeyDown={(e) => e.key === "Enter" && askCopilot()} 
+            placeholder="Ask BidPilot..." 
+          />
+          <button 
+            onClick={() => askCopilot()} 
+            className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition"
+          >
+            Send
+          </button>
         </div>
       </div>
     </div>
