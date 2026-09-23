@@ -14,6 +14,9 @@ export async function POST(req: Request) {
     const prompt = `
       You are an expert enterprise procurement parsing engine.
       Extract commercial terms, line items, and MOQs.
+      
+      CRITICAL DEDUPLICATION RULE: If a document contains tiered pricing, merged cells, or multiple delivery schedules for the same item, CONSOLIDATE them. NEVER output duplicate line items with the same description. If an exact quantity is missing, return null rather than guessing.
+
       Return ONLY a pure valid JSON object with this exact schema:
       {
         "vendor_name": "${vendorName}",
@@ -36,7 +39,7 @@ export async function POST(req: Request) {
         ]
       }
     `;
-
+    
     let rawText = "";
 
     // --- ATTEMPT 1: Primary (Google Gemini 3.6 Flash) ---
@@ -111,6 +114,18 @@ export async function POST(req: Request) {
     }
 
     const parsedData = JSON.parse(cleanJson);
+
+    const uniqueItems = new Map();
+    (parsedData.line_items || []).forEach((item: any) => {
+      const key = (item.description || "unknown").toLowerCase().trim();
+      
+      // If we haven't seen this item yet, or if this duplicate actually has a valid quantity/price while the previous one was 0, swap it.
+      if (!uniqueItems.has(key) || (item.quoted_qty > 0 && uniqueItems.get(key).quoted_qty === 0)) {
+        uniqueItems.set(key, item);
+      }
+    });
+    // Replace the bloated array with our cleaned, unique array
+    parsedData.line_items = Array.from(uniqueItems.values());
 
     // TCO Normalization & Scorecard Engine
     const baseCurrency = parsedData.commercials?.currency?.toUpperCase() || "INR";
