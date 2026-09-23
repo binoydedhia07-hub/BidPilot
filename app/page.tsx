@@ -70,12 +70,7 @@ export default function Dashboard() {
       const res = await fetch("/api/parse", { method: "POST", body: formData });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      try {
-      const res = await fetch("/api/parse", { method: "POST", body: formData });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
       
-      // Enterprise Fuzzy Matching (Checks for word overlap and substring inclusion)
       const isFuzzyMatch = (s1: string, s2: string) => {
         if (!s1 || !s2) return false;
         const n1 = s1.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -85,7 +80,7 @@ export default function Dashboard() {
         const words1 = s1.toLowerCase().match(/\b\w+\b/g) || [];
         const words2 = s2.toLowerCase().match(/\b\w+\b/g) || [];
         const overlap = words1.filter(w => words2.includes(w)).length;
-        const threshold = Math.min(words1.length, words2.length) * 0.6; // 60% word overlap threshold
+        const threshold = Math.min(words1.length, words2.length) * 0.6; 
         return overlap >= threshold && overlap > 0;
       };
 
@@ -95,40 +90,8 @@ export default function Dashboard() {
         const aiMatch = rfxBaseline.find(r => r.category === item.master_item_category);
         const targetRfx = exactMatch || aiMatch;
         
-        // Use fuzzy match to auto-confirm AI guesses that are close enough
-        let semanticConfirmed = !!exactMatch || (targetRfx && isFuzzyMatch(desc, targetRfx.category)); 
+        let semanticConfirmed = !!exactMatch || !!(targetRfx && isFuzzyMatch(desc, targetRfx.category)); 
         
-        let hitlResolved = false;
-        let conversionMultiplier = 1;
-        let normalizedPrice = 0;
-
-        if (semanticConfirmed && targetRfx) {
-          const autoConv = attemptAutoConversion(item.quoted_uom, targetRfx.base_uom);
-          if (autoConv.match) {
-            hitlResolved = true;
-            conversionMultiplier = autoConv.multiplier;
-            normalizedPrice = recalculateItemPrice(item, data, conversionMultiplier);
-          }
-        }
-
-        return {
-          ...item,
-          vendor_raw_description: desc,
-          master_item_category: targetRfx ? targetRfx.category : "",
-          semantic_confirmed: semanticConfirmed,
-          hitl_resolved: hitlResolved,
-          conversion_multiplier: conversionMultiplier,
-          normalized_price_inr: normalizedPrice,
-          is_extra: !targetRfx 
-        };
-      });
-      data.line_items = (data.line_items || []).map((item: any) => {
-        const desc = item.vendor_raw_description || item.description || "";
-        const exactMatch = rfxBaseline.find(r => r.category.toLowerCase() === desc.toLowerCase());
-        const aiMatch = rfxBaseline.find(r => r.category === item.master_item_category);
-        const targetRfx = exactMatch || aiMatch;
-        
-        let semanticConfirmed = !!exactMatch; 
         let hitlResolved = false;
         let conversionMultiplier = 1;
         let normalizedPrice = 0;
@@ -185,7 +148,6 @@ export default function Dashboard() {
     }
   };
 
-  // PURE FUNCTION: Finds items NOT actively locked in a row
   const getAvailableItemsForVendor = (v: any) => {
     const occupiedItems = rfxBaseline.map(rfx => 
       v.line_items?.find((i: any) => i.master_item_category === rfx.category && !i.is_extra)
@@ -411,7 +373,6 @@ export default function Dashboard() {
                   </tr>
                 ))}
                 
-                {/* RENDER EXTRAS & UNMAPPED AT BOTTOM */}
                 {getAllExtras().length > 0 && (
                   <>
                     <tr className="bg-slate-900/80">
@@ -448,7 +409,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* RIGHT: BidPilot Interrogation */}
       <div className="w-1/3 p-6 flex flex-col bg-slate-950/50">
         <div className="mb-4">
           <h2 className="text-lg font-bold text-white">BidPilot AI</h2>
