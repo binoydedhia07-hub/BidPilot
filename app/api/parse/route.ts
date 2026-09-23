@@ -93,6 +93,7 @@ export async function POST(req: Request) {
       const completion = await openai.chat.completions.create({
         model: fallbackModel,
         messages: [{ role: "user", content: messageContent }],
+        max_tokens: 2500,
       });
 
       rawText = completion?.choices?.[0]?.message?.content || "{}";
