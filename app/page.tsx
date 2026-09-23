@@ -9,7 +9,6 @@ export default function Dashboard() {
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // --- THE RFX BASELINE (Source of Truth) ---
   const [rfxBaseline] = useState([
     { category: "Heavy 5-Ply Cartons Master", req_qty: 1000, base_uom: "pieces" },
     { category: "Standard 3-Ply Cartons", req_qty: 1000, base_uom: "pieces" },
@@ -18,7 +17,6 @@ export default function Dashboard() {
     { category: "High Tensile Stretch Film 23mic", req_qty: 1000, base_uom: "kg" }
   ]);
 
-  // --- ROBUST UNIT NORMALIZATION & AUTO-CONVERSION ---
   const normalizeUom = (u: string) => {
     let lower = (u || '').trim().toLowerCase();
     if (['pcs', 'piece', 'pieces', 'unit', 'units', 'each', 'nos', 'number', 'pp'].includes(lower)) return 'pieces';
@@ -30,16 +28,13 @@ export default function Dashboard() {
     return lower;
   };
 
-  // Automatically solves standard conversions (e.g. "1000 pieces" -> divisor 1000, "kg" to "g" -> divisor 1000)
   const attemptAutoConversion = (quoted: string, target: string) => {
     const q = (quoted || "").toLowerCase().trim();
     const t = normalizeUom(target);
     const qNorm = normalizeUom(q);
 
-    // 1. Exact unit match
     if (qNorm === t) return { match: true, multiplier: 1 };
-
-    // 2. Extracted numeric quantities (e.g. "1000 pieces")
+    
     const numMatch = q.match(/^([\d.,]+)\s*(.*)$/);
     if (numMatch) {
       const num = parseFloat(numMatch[1].replace(/,/g, ''));
@@ -47,15 +42,12 @@ export default function Dashboard() {
       if (text === t) return { match: true, multiplier: num };
     }
 
-    // 3. Standard weight conversions
     if (qNorm === 'kg' && t === 'g') return { match: true, multiplier: 1000 };
     if (qNorm === 'g' && t === 'kg') return { match: true, multiplier: 0.001 };
 
-    // Unsolvable (e.g., Carton to Pieces)
     return { match: false, multiplier: 1 };
   };
 
-  // Helper to standardise price recalculation including freight
   const recalculateItemPrice = (item: any, vendor: any, multiplier: number) => {
     const rawPrice = Number(item.unit_price) || 0;
     const freightStr = (vendor.commercials?.freight_terms || "").toLowerCase();
@@ -79,13 +71,13 @@ export default function Dashboard() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       
-      // Process initial states robustly
       data.line_items = (data.line_items || []).map((item: any) => {
-        const exactMatch = rfxBaseline.find(r => r.category.toLowerCase() === (item.vendor_raw_description || '').toLowerCase());
+        const desc = item.vendor_raw_description || item.description || "";
+        const exactMatch = rfxBaseline.find(r => r.category.toLowerCase() === desc.toLowerCase());
         const aiMatch = rfxBaseline.find(r => r.category === item.master_item_category);
         const targetRfx = exactMatch || aiMatch;
         
-        let semanticConfirmed = !!exactMatch; // Auto-confirm if exact string
+        let semanticConfirmed = !!exactMatch; 
         let hitlResolved = false;
         let conversionMultiplier = 1;
         let normalizedPrice = 0;
@@ -101,12 +93,13 @@ export default function Dashboard() {
 
         return {
           ...item,
+          vendor_raw_description: desc,
           master_item_category: targetRfx ? targetRfx.category : "",
           semantic_confirmed: semanticConfirmed,
           hitl_resolved: hitlResolved,
           conversion_multiplier: conversionMultiplier,
           normalized_price_inr: normalizedPrice,
-          is_extra: !targetRfx // Marked as extra/unmapped if no baseline match at all
+          is_extra: !targetRfx 
         };
       });
 
@@ -141,6 +134,15 @@ export default function Dashboard() {
     }
   };
 
+  // PURE FUNCTION: Finds items NOT actively locked in a row
+  const getAvailableItemsForVendor = (v: any) => {
+    const occupiedItems = rfxBaseline.map(rfx => 
+      v.line_items?.find((i: any) => i.master_item_category === rfx.category && !i.is_extra)
+    ).filter(Boolean);
+    
+    return (v.line_items || []).filter((i: any) => !occupiedItems.includes(i));
+  };
+
   const calculateVendorTotal = (v: any) => {
     let total = 0;
     rfxBaseline.forEach(rfx => {
@@ -149,17 +151,12 @@ export default function Dashboard() {
         total += vItem.normalized_price_inr * rfx.req_qty;
       }
     });
-    (v.line_items || []).forEach((i: any) => {
-      if (i.is_extra && i.normalized_price_inr && i.semantic_confirmed && i.hitl_resolved) {
+    getAvailableItemsForVendor(v).forEach((i: any) => {
+      if (i.normalized_price_inr && i.semantic_confirmed && i.hitl_resolved) {
          total += i.normalized_price_inr * (Number(i.quoted_qty) || 1);
       }
     });
     return total;
-  };
-
-  // Get items not actively confirmed to any row (makes dropdowns work correctly)
-  const getAvailableItemsForVendor = (v: any) => {
-    return (v.line_items || []).filter((i: any) => !i.semantic_confirmed || i.is_extra);
   };
 
   const getAllExtras = () => {
@@ -172,7 +169,6 @@ export default function Dashboard() {
 
   return (
     <div className="flex h-screen bg-slate-900 text-slate-100 font-sans overflow-hidden">
-      {/* LEFT: Master Grid */}
       <div className="w-2/3 p-6 flex flex-col border-r border-slate-800 overflow-hidden">
         <div className="flex justify-between items-center mb-6">
           <div>
@@ -266,7 +262,7 @@ export default function Dashboard() {
                           <td key={colIdx} className="p-0 border-l border-slate-800 align-top bg-amber-950/20">
                             <div className="p-3 h-full flex flex-col justify-start border-b-2 border-amber-500/50">
                               <div className="text-[10px] text-amber-500 font-bold tracking-wider uppercase mb-2">🔍 AI Suggestion</div>
-                              <div className="text-xs text-white mb-3 leading-tight">"{vItem.vendor_raw_description}"</div>
+                              <div className="text-[11px] text-white mb-3 leading-tight font-medium">"{vItem.vendor_raw_description}"</div>
                               <div className="flex gap-2 mt-auto">
                                 <button 
                                   onClick={() => setVendorData(prev => prev.map((vend, id) => {
@@ -373,13 +369,15 @@ export default function Dashboard() {
                       </td>
                     </tr>
                     {getAllExtras().map((extraDesc, rowIdx) => (
-                      <tr key={`extra-${rowIdx}`} className="hover:bg-slate-900/50 transition">
+                      <tr key={`extra-${rowIdx}`} className="hover:bg-slate-900/50 transition h-20">
                         <td className="p-3 align-top">
                           <div className="font-medium text-slate-400">{extraDesc}</div>
                           <div className="text-[10px] text-slate-600 mt-1 uppercase tracking-wider">Awaiting Assignment</div>
                         </td>
                         {vendorData.map((v, colIdx) => {
-                          const vItem = v.line_items?.find((i: any) => i.vendor_raw_description === extraDesc && (!i.semantic_confirmed || i.is_extra));
+                          const availableItems = getAvailableItemsForVendor(v);
+                          const vItem = availableItems.find((i: any) => i.vendor_raw_description === extraDesc);
+                          
                           if (!vItem) return <td key={colIdx} className="p-3 border-l border-slate-800" />;
                           return (
                             <td key={colIdx} className="p-3 border-l border-slate-800 align-top">
