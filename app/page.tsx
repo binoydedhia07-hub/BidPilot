@@ -69,73 +69,126 @@ export default function Dashboard() {
           </label>
         </div>
 
-        {/* --- HITL AMBIGUITY RESOLUTION QUEUE --- */}
+        {/* --- HITL TRUE NORMALIZATION & RESOLUTION QUEUE --- */}
         {vendorData.length > 0 && vendorData.some(v => 
-          v.line_items?.some((item: any) => item.quoted_uom && !['pcs', 'unit', 'each'].includes(item.quoted_uom.toLowerCase()))
+          v.line_items?.some((item: any) => {
+            const uom = (item.quoted_uom || "").trim().toLowerCase();
+            const isMissingUnit = !uom || /^\d+$/.test(uom);
+            const needsNormalization = isMissingUnit || !item.target_base_uom || uom !== item.target_base_uom.toLowerCase();
+            return (needsNormalization || !item.master_item_category) && !item.hitl_resolved;
+          })
         ) && (
           <div className="mb-6 bg-amber-950/40 border border-amber-800/50 rounded-xl p-4 shadow-lg">
             <h3 className="text-amber-500 font-bold text-sm mb-3 flex items-center">
-              <span className="mr-2">⚠️</span> HITL Review: Ambiguous Packaging Terms Detected
+              <span className="mr-2">⚠️</span> HITL Review: Normalize Units & Categories
             </h3>
-            <div className="space-y-2">
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
               {vendorData.map((v, vIdx) => 
                 v.line_items?.map((item: any, iIdx: number) => {
-                  // Flag if the UoM is not a standard individual piece
-                  const isAmbiguous = item.quoted_uom && !['pcs', 'unit', 'each'].includes(item.quoted_uom.toLowerCase());
-                  if (!isAmbiguous) return null;
+                  const uom = (item.quoted_uom || "").trim().toLowerCase();
+                  const isMissingUnit = !uom || /^\d+$/.test(uom);
+                  const needsReview = (isMissingUnit || !item.target_base_uom || uom !== (item.target_base_uom || "").toLowerCase() || !item.master_item_category) && !item.hitl_resolved;
+                  
+                  if (!needsReview) return null;
 
                   return (
                     <div key={`${vIdx}-${iIdx}`} className="flex items-center justify-between text-xs bg-slate-900/60 p-3 rounded border border-amber-900/30">
-                      <div className="w-1/3 text-slate-300 truncate pr-4">
+                      <div className="w-1/4 text-slate-300 truncate pr-4">
                         <span className="font-bold text-white">{v.vendor_name}</span>
                         <br/>
-                        <span className="text-slate-500">"{item.vendor_raw_description || item.description}"</span>
+                        <span className="text-slate-500" title={item.vendor_raw_description || item.description}>"{item.vendor_raw_description || item.description}"</span>
                       </div>
                       
-                      <div className="flex-1 flex items-center gap-4">
+                      <div className="flex-1 flex items-center gap-3">
                         <div>
-                          <span className="text-slate-500 block text-[10px] uppercase tracking-wider mb-1">AI Extracted UoM</span> 
-                          <span className="bg-slate-800 px-2 py-1 rounded text-amber-200 font-medium">{item.quoted_uom}</span>
-                        </div>
-                        <div>
-                          <span className="text-slate-500 block text-[10px] uppercase tracking-wider mb-1">Set Units Per Pack</span>
+                          <span className="text-slate-500 block text-[9px] uppercase tracking-wider mb-1">Master Category</span>
                           <input 
-                            type="number" 
-                            min="1"
-                            className="bg-slate-950 border border-amber-700/50 rounded px-3 py-1 w-24 text-white focus:border-amber-500 outline-none transition"
-                            value={item.units_per_pack || 1}
+                            type="text" 
+                            className="bg-slate-950 border border-amber-700/50 rounded px-2 py-1 w-32 text-white focus:border-amber-500 outline-none transition text-xs"
+                            value={item.master_item_category || item.description || ""}
                             onChange={(e) => {
-                              const newMultiplier = Number(e.target.value) || 1;
+                              const newCat = e.target.value;
                               setVendorData((prev) => {
                                 const newData = [...prev];
-                                const targetItem = newData[vIdx].line_items[iIdx];
-                                targetItem.units_per_pack = newMultiplier;
-                                
-                                // Recalculate normalized price deterministically 
-                                const rawPrice = Number(targetItem.unit_price) || 0;
-                                const freightStr = (newData[vIdx].commercials?.freight_terms || "").toLowerCase();
-                                
-                                let baseRate = rawPrice / newMultiplier;
-                                if (freightStr.includes("ex-works") || freightStr.includes("extra")) {
-                                  baseRate = baseRate * 1.025; // Re-apply 2.5% freight buffer
-                                }
-                                
-                                targetItem.normalized_price_inr = baseRate;
-                                targetItem.line_total_inr = baseRate * (Number(targetItem.quoted_qty) || 1);
-                                
-                                // Recalculate the vendor's total landed spend based on the human correction
-                                newData[vIdx].vendor_scorecard.total_landed_spend = newData[vIdx].line_items.reduce(
-                                  (sum: number, it: any) => sum + (it.line_total_inr || 0), 0
-                                );
-                                
+                                newData[vIdx].line_items[iIdx].master_item_category = newCat;
                                 return newData;
                               });
                             }}
                           />
                         </div>
+
+                        <div className="flex items-center gap-2 border-l border-amber-900/30 pl-3">
+                          <div>
+                            <span className="text-slate-500 block text-[9px] uppercase tracking-wider mb-1">Quoted UoM</span>
+                            <span className={`px-2 py-1 rounded font-medium text-xs ${isMissingUnit ? 'bg-red-900/50 text-red-200 border border-red-500/50' : 'bg-slate-800 text-amber-200'}`}>
+                              {isMissingUnit ? "MISSING" : item.quoted_uom}
+                            </span>
+                          </div>
+                          
+                          <div className="text-slate-500 mt-3">→</div>
+                          
+                          <div>
+                            <span className="text-slate-500 block text-[9px] uppercase tracking-wider mb-1">Target Base Unit</span>
+                            <input 
+                              type="text" placeholder="e.g. g, pcs"
+                              className="bg-slate-950 border border-amber-700/50 rounded px-2 py-1 w-20 text-white focus:border-amber-500 outline-none transition text-xs"
+                              value={item.target_base_uom || ""}
+                              onChange={(e) => {
+                                setVendorData((prev) => {
+                                  const newData = [...prev];
+                                  newData[vIdx].line_items[iIdx].target_base_uom = e.target.value;
+                                  return newData;
+                                });
+                              }}
+                            />
+                          </div>
+
+                          <div className="text-slate-500 mt-3">×</div>
+
+                          <div>
+                            <span className="text-slate-500 block text-[9px] uppercase tracking-wider mb-1">Multiplier</span>
+                            <input 
+                              type="number" min="0.0001" step="any"
+                              className="bg-slate-950 border border-amber-700/50 rounded px-2 py-1 w-16 text-white focus:border-amber-500 outline-none transition text-xs"
+                              value={item.conversion_multiplier || 1}
+                              onChange={(e) => {
+                                const newMultiplier = Number(e.target.value) || 1;
+                                setVendorData((prev) => {
+                                  const newData = [...prev];
+                                  const targetItem = newData[vIdx].line_items[iIdx];
+                                  targetItem.conversion_multiplier = newMultiplier;
+                                  
+                                  const rawPrice = Number(targetItem.unit_price) || 0;
+                                  const freightStr = (newData[vIdx].commercials?.freight_terms || "").toLowerCase();
+                                  
+                                  let baseRate = rawPrice / newMultiplier;
+                                  if (freightStr.includes("ex-works") || freightStr.includes("extra")) {
+                                    baseRate = baseRate * 1.025;
+                                  }
+                                  
+                                  targetItem.normalized_price_inr = baseRate;
+                                  targetItem.line_total_inr = baseRate * (Number(targetItem.quoted_qty) || 1);
+                                  
+                                  newData[vIdx].vendor_scorecard.total_landed_spend = newData[vIdx].line_items.reduce(
+                                    (sum: number, it: any) => sum + (it.line_total_inr || 0), 0
+                                  );
+                                  return newData;
+                                });
+                              }}
+                            />
+                          </div>
+                        </div>
                       </div>
-                      <button className="text-amber-500 hover:text-amber-400 hover:bg-amber-500/10 px-4 py-1.5 rounded transition border border-amber-500/20">
-                        Confirm & Recalculate
+                      <button 
+                        onClick={() => {
+                          setVendorData((prev) => {
+                            const newData = [...prev];
+                            newData[vIdx].line_items[iIdx].hitl_resolved = true;
+                            return newData;
+                          });
+                        }}
+                        className="text-amber-500 hover:text-amber-400 hover:bg-amber-500/10 px-4 py-1.5 rounded transition border border-amber-500/20 ml-2">
+                        Confirm 
                       </button>
                     </div>
                   );
@@ -153,12 +206,12 @@ export default function Dashboard() {
             <table className="w-full text-left text-sm border-collapse">
               <thead>
                 <tr className="border-b-2 border-slate-700 bg-slate-900">
-                  <th className="p-3 w-1/4">Line Item / Spec</th>
+                  <th className="p-3 w-1/4">Master Category</th>
                   {vendorData.map((v, i) => (
                     <th key={i} className="p-3 font-normal text-xs align-top border-l border-slate-800">
                       <div className="font-bold text-base text-white mb-1">{v.vendor_name}</div>
                       <div className="text-emerald-400 font-bold mb-3 text-lg">
-                        ₹{v.vendor_scorecard.total_landed_spend.toLocaleString()}
+                        ₹{v.vendor_scorecard.total_landed_spend.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}
                       </div>
                       <div className="space-y-1 mb-3 border-b border-slate-800 pb-3">
                         {v.vendor_scorecard.commercial_insights?.map((insight: string, idx: number) => (
@@ -175,40 +228,49 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
-                {vendorData[0]?.line_items.map((item: any, rowIdx: number) => (
-                  <tr key={rowIdx} className="hover:bg-slate-900/50 transition">
-                    <td className="p-3 font-medium text-slate-300">
-                      {item.description}
-                      <span className="block text-xs text-slate-500 mt-1">Req Qty: {item.quoted_qty}</span>
-                    </td>
-                    {vendorData.map((v, colIdx) => {
-                      const vItem = v.line_items[rowIdx];
-                      
-                      // Handle missing or incomplete quotes gracefully
-                      if (!vItem || !vItem.normalized_price_inr) {
+                {/* Dynamically extract all unique categories across all vendors */}
+                {Array.from(new Set(
+                  vendorData.flatMap(v => v.line_items?.map((i: any) => i.master_item_category || i.description) || [])
+                )).filter(Boolean).map((categoryName: any, rowIdx: number) => {
+                  
+                  // Extract the general required quantity for this row (if available from any vendor)
+                  const generalReqQty = vendorData.flatMap(v => v.line_items || []).find((i: any) => (i.master_item_category || i.description) === categoryName)?.quoted_qty || 0;
+
+                  return (
+                    <tr key={rowIdx} className="hover:bg-slate-900/50 transition">
+                      <td className="p-3 font-medium text-slate-300 align-top">
+                        {categoryName}
+                        <span className="block text-xs text-slate-500 mt-1">Req Qty: {generalReqQty}</span>
+                      </td>
+                      {vendorData.map((v, colIdx) => {
+                        // Find the exact item for this vendor based on the Master Category
+                        const vItem = v.line_items?.find((i: any) => (i.master_item_category || i.description) === categoryName);
+                        
+                        if (!vItem || !vItem.normalized_price_inr) {
+                          return (
+                            <td key={colIdx} className="p-3 border-l border-slate-800 align-top">
+                              <span className="text-xs text-slate-500 italic">No quote data</span>
+                            </td>
+                          );
+                        }
+
+                        const hasMOQIssue = vItem.moq_required > generalReqQty;
+
                         return (
                           <td key={colIdx} className="p-3 border-l border-slate-800 align-top">
-                            <span className="text-xs text-slate-500 italic">No quote data</span>
+                            <div className="text-[10px] text-slate-400 mb-1 leading-tight truncate w-40" title={vItem.vendor_raw_description || vItem.description}>
+                              "{vItem.vendor_raw_description || vItem.description}"
+                            </div>
+                            <div className={`font-semibold ${hasMOQIssue ? "text-red-400" : "text-emerald-400"}`}>
+                              ₹{vItem.normalized_price_inr.toFixed(2)} <span className="text-[10px] text-slate-500 font-normal">/ {vItem.target_base_uom || "unit"}</span>
+                            </div>
+                            {hasMOQIssue && <div className="text-[10px] text-red-500 font-bold mt-1 uppercase tracking-wider">MOQ Failed: {vItem.moq_required} req</div>}
                           </td>
                         );
-                      }
-
-                      const hasMOQIssue = vItem.moq_required > item.quoted_qty;
-                      return (
-                        <td key={colIdx} className="p-3 border-l border-slate-800 align-top">
-                          {/* Display the vendor's extracted description so mismatches are obvious */}
-                          <div className="text-[10px] text-slate-400 mb-1 leading-tight truncate w-40" title={vItem.description}>
-                            "{vItem.description}"
-                          </div>
-                          <div className={`font-semibold ${hasMOQIssue ? "text-red-400" : "text-emerald-400"}`}>
-                            ₹{vItem.normalized_price_inr.toFixed(2)} <span className="text-[10px] text-slate-500 font-normal">/ unit</span>
-                          </div>
-                          {hasMOQIssue && <div className="text-[10px] text-red-500 font-bold mt-1 uppercase tracking-wider">MOQ Failed: {vItem.moq_required} req</div>}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                      })}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
