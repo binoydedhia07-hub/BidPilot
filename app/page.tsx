@@ -48,11 +48,6 @@ export default function Dashboard() {
     return { match: false, multiplier: 1 };
   };
 
-  const recalculateItemPrice = (item: any, vendor: any, multiplier: number) => {
-    const rawPrice = Number(item.unit_price) || 0;
-    return rawPrice / multiplier; // Freight is now handled in the total calculation
-  };
-
   const handleFileUpload = async (e: any) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -88,7 +83,6 @@ export default function Dashboard() {
         const targetRfx = exactMatch || aiMatch;
         
         let semanticConfirmed = !!exactMatch || !!(targetRfx && isFuzzyMatch(desc, targetRfx.category)); 
-        
         let hitlResolved = false;
         let conversionMultiplier = 1;
         let normalizedPrice = 0;
@@ -98,7 +92,7 @@ export default function Dashboard() {
           if (autoConv.match) {
             hitlResolved = true;
             conversionMultiplier = autoConv.multiplier;
-            normalizedPrice = recalculateItemPrice(item, data, conversionMultiplier);
+            normalizedPrice = (Number(item.unit_price) || 0) / conversionMultiplier;
           }
         }
 
@@ -149,12 +143,11 @@ export default function Dashboard() {
     const occupiedItems = rfxBaseline.map(rfx => 
       v.line_items?.find((i: any) => i.master_item_category === rfx.category && !i.is_extra)
     ).filter(Boolean);
-    
     return (v.line_items || []).filter((i: any) => !occupiedItems.includes(i));
   };
 
-  // NEW TOTAL LANDED COST MATH INCLUDING COMMERCIALS
-  const calculateVendorTotal = (v: any) => {
+  // RETURNS A DETAILED MATH BREAKDOWN
+  const calculateVendorMath = (v: any) => {
     let subtotal = 0;
     rfxBaseline.forEach(rfx => {
       const vItem = v.line_items?.find((i: any) => i.master_item_category === rfx.category && !i.is_extra);
@@ -172,11 +165,12 @@ export default function Dashboard() {
     const taxPct = Number(v.commercials?.tax_pct) || 0;
     const shippingFlat = Number(v.commercials?.shipping_cost_flat) || 0;
 
-    const afterDiscount = subtotal - (subtotal * (discountPct / 100));
-    const afterTax = afterDiscount + (afterDiscount * (taxPct / 100));
-    const landedCost = afterTax + shippingFlat;
+    const discountAmt = subtotal * (discountPct / 100);
+    const afterDiscount = subtotal - discountAmt;
+    const taxAmt = afterDiscount * (taxPct / 100);
+    const landedCost = afterDiscount + taxAmt + shippingFlat;
 
-    return landedCost;
+    return { subtotal, discountPct, discountAmt, taxPct, taxAmt, shippingFlat, landedCost };
   };
 
   const getAllExtras = () => {
@@ -208,27 +202,40 @@ export default function Dashboard() {
             <table className="w-full text-left text-sm border-collapse table-fixed">
               <thead>
                 <tr className="border-b-2 border-slate-700 bg-slate-900">
-                  <th className="p-3 w-1/4">Requirement</th>
-                  {vendorData.map((v, i) => (
-                    <th key={i} className="p-3 font-normal text-xs align-top border-l border-slate-800 w-1/3">
-                      <div className="font-bold text-base text-white mb-1">{v.vendor_name}</div>
-                      
-                      {/* NEW LANDED COST & SCORECARD RENDER */}
-                      <div className="text-emerald-400 font-bold mb-3 text-lg">
-                        ₹{calculateVendorTotal(v).toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}
-                      </div>
-                      <div className="space-y-1 mb-3 border-b border-slate-800 pb-3">
-                        {v.vendor_scorecard?.commercial_insights?.map((insight: string, idx: number) => (
-                          <div key={idx} className="text-[10px] leading-tight text-slate-300 bg-slate-800/50 p-1.5 rounded">{insight}</div>
-                        ))}
-                      </div>
-                      <div className="text-slate-400 space-y-1 text-[11px]">
-                        <div>Risk Rating: <span className="text-white">{v.vendor_scorecard?.market_risk_rating}/5.0</span></div>
-                        <div>Lead Time: <span className="text-white">{v.vendor_scorecard?.shipping_lead_time_days} days</span></div>
-                        <div>Compliance: <span className="text-white">{v.vendor_scorecard?.compliance_score}%</span></div>
-                      </div>
-                    </th>
-                  ))}
+                  <th className="p-3 w-1/4 align-top">
+                    <div className="font-bold text-white mb-4">Requirement</div>
+                    <div className="text-xs text-slate-500 uppercase tracking-wider">Landed Cost Calculation</div>
+                  </th>
+                  {vendorData.map((v, i) => {
+                    const math = calculateVendorMath(v);
+                    const warranty = v.commercials?.warranty_terms || "None";
+                    
+                    return (
+                      <th key={i} className="p-3 font-normal text-xs align-top border-l border-slate-800 w-1/3">
+                        <div className="font-bold text-base text-white mb-2">{v.vendor_name}</div>
+                        
+                        <div className="bg-slate-900 border border-slate-800 rounded p-2 mb-3">
+                          <div className="flex justify-between text-slate-400 mb-1"><span>Subtotal:</span> <span>₹{math.subtotal.toFixed(2)}</span></div>
+                          {math.discountPct > 0 && <div className="flex justify-between text-emerald-400 mb-1"><span>Discount ({math.discountPct}%):</span> <span>- ₹{math.discountAmt.toFixed(2)}</span></div>}
+                          {math.taxPct > 0 && <div className="flex justify-between text-red-400 mb-1"><span>Tax ({math.taxPct}%):</span> <span>+ ₹{math.taxAmt.toFixed(2)}</span></div>}
+                          {math.shippingFlat > 0 && <div className="flex justify-between text-red-400 mb-1"><span>Shipping:</span> <span>+ ₹{math.shippingFlat.toFixed(2)}</span></div>}
+                          
+                          <div className="border-t border-slate-700 mt-2 pt-2 flex justify-between font-bold text-lg text-emerald-400">
+                            <span>Total:</span> <span>₹{math.landedCost.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}</span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1 mb-2">
+                          <div className={`text-[10px] p-1.5 rounded ${warranty !== "None" ? "bg-blue-900/30 text-blue-300 border border-blue-800" : "bg-slate-800 text-slate-500"}`}>
+                            🛡️ Warranty: {warranty}
+                          </div>
+                          {v.vendor_scorecard?.commercial_insights?.map((insight: string, idx: number) => (
+                            <div key={idx} className="text-[10px] text-slate-300 bg-slate-800/50 p-1.5 rounded">{insight}</div>
+                          ))}
+                        </div>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
@@ -269,7 +276,7 @@ export default function Dashboard() {
                                             semantic_confirmed: true, 
                                             hitl_resolved: autoConv.match,
                                             conversion_multiplier: autoConv.multiplier,
-                                            normalized_price_inr: autoConv.match ? recalculateItemPrice(it, vend, autoConv.multiplier) : 0
+                                            normalized_price_inr: autoConv.match ? ((Number(it.unit_price) || 0) / autoConv.multiplier) : 0
                                           };
                                         }
                                         return it;
@@ -309,7 +316,7 @@ export default function Dashboard() {
                                           semantic_confirmed: true,
                                           hitl_resolved: autoConv.match,
                                           conversion_multiplier: autoConv.multiplier,
-                                          normalized_price_inr: autoConv.match ? recalculateItemPrice(it, vend, autoConv.multiplier) : 0
+                                          normalized_price_inr: autoConv.match ? ((Number(it.unit_price) || 0) / autoConv.multiplier) : 0
                                         }
                                       })
                                     }
@@ -352,7 +359,7 @@ export default function Dashboard() {
                                       ...vend,
                                       line_items: vend.line_items.map((it: any) => {
                                         if (it !== vItem) return it;
-                                        return { ...it, normalized_price_inr: recalculateItemPrice(it, vend, it.conversion_multiplier || 1), hitl_resolved: true };
+                                        return { ...it, normalized_price_inr: (Number(it.unit_price) || 0) / (it.conversion_multiplier || 1), hitl_resolved: true };
                                       })
                                     };
                                   }));
@@ -391,38 +398,6 @@ export default function Dashboard() {
                     })}
                   </tr>
                 ))}
-                
-                {/* RENDER EXTRAS & UNMAPPED AT BOTTOM */}
-                {getAllExtras().length > 0 && (
-                  <>
-                    <tr className="bg-slate-900/80">
-                      <td colSpan={vendorData.length + 1} className="p-3 text-xs font-bold text-purple-400 uppercase tracking-wider border-t-2 border-slate-700">
-                        Unmapped & Additional Items
-                      </td>
-                    </tr>
-                    {getAllExtras().map((extraDesc, rowIdx) => (
-                      <tr key={`extra-${rowIdx}`} className="hover:bg-slate-900/50 transition h-20">
-                        <td className="p-3 align-top">
-                          <div className="font-medium text-slate-400">{extraDesc}</div>
-                          <div className="text-[10px] text-slate-600 mt-1 uppercase tracking-wider">Awaiting Assignment</div>
-                        </td>
-                        {vendorData.map((v, colIdx) => {
-                          const availableItems = getAvailableItemsForVendor(v);
-                          const vItem = availableItems.find((i: any) => i.vendor_raw_description === extraDesc);
-                          
-                          if (!vItem) return <td key={colIdx} className="p-3 border-l border-slate-800" />;
-                          return (
-                            <td key={colIdx} className="p-3 border-l border-slate-800 align-top">
-                              <div className="font-semibold text-purple-400">
-                                ₹{Number(vItem.unit_price).toFixed(2)} <span className="text-[10px] text-slate-500 font-normal">/ {vItem.quoted_uom || "unit"}</span>
-                              </div>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </>
-                )}
               </tbody>
             </table>
           )}
@@ -436,7 +411,7 @@ export default function Dashboard() {
         </div>
         <div className="flex-1 overflow-auto space-y-4 mb-4 pr-1">
           {chatLog.map((msg, i) => (
-            <div key={i} className={`p-4 rounded-lg text-sm ${msg.role === "user" ? "bg-blue-600/20 border border-blue-500/30 text-blue-100 ml-4" : "bg-slate-900 border border-slate-800 text-slate-200 mr-2 prose prose-invert prose-sm max-w-none"}`}>
+            <div key={i} className={`p-4 rounded-lg text-sm ${msg.role === "user" ? "bg-blue-600/20 border border-blue-500/30 text-blue-100 ml-4" : "bg-slate-900 border border-slate-800 text-slate-200 mr-2 prose prose-invert prose-sm max-w-none prose-table:w-full prose-table:border-collapse prose-th:border prose-th:border-slate-700 prose-th:bg-slate-800 prose-th:p-2 prose-td:border prose-td:border-slate-800 prose-td:p-2"}`}>
               <div className="text-[10px] font-bold uppercase text-slate-500 mb-2 tracking-wider">
                 {msg.role === "user" ? "Buyer" : "BidPilot"}
               </div>
@@ -446,8 +421,7 @@ export default function Dashboard() {
         </div>
         {vendorData.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
-            <button onClick={() => askCopilot("🏆 Recommend Winner", "Evaluate the vendors based on Total Landed Cost (which now includes shipping, taxes, and discounts). Disqualify bids that missed items or failed MOQ.")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">🏆 Recommend Winner</button>
-            <button onClick={() => askCopilot("📦 Check Availability", "Which vendors are missing items from the RFx baseline?")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">📦 Check Availability</button>
+            <button onClick={() => askCopilot("🏆 Recommend Winner", "Calculate the Total Landed Cost (including discounts, taxes, shipping). Recommend the vendor with the lowest landed cost. Output a Markdown table comparing the costs.")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">🏆 Recommend Winner</button>
           </div>
         )}
         <div className="flex gap-2">
