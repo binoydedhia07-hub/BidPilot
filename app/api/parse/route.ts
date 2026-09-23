@@ -19,22 +19,24 @@ export async function POST(req: Request) {
       CRITICAL INSTRUCTION: Extract EVERY line item, product, or fee.
       
       NORMALIZATION RULES:
-      1. EXACT DESCRIPTION: Capture the exact text written on the vendor's quote in the "vendor_raw_description" field. CRITICAL: You MUST escape all internal quotation marks (e.g., use 3\\" instead of 3").
-      2. SEMANTIC MATCHING: Compare the item to this strict RFx Baseline: ${rfxCategories}. If it is a logical match, output the exact RFx string in the "master_item_category" field. If it does NOT map, leave "master_item_category" blank ("").
+      1. EXACT DESCRIPTION: Capture the exact text written on the vendor's quote. Escape all quotation marks (e.g., 3\\").
+      2. SEMANTIC MATCHING: Compare the item to this strict RFx Baseline: ${rfxCategories}. Map it to "master_item_category" if it logically matches, otherwise leave blank.
       3. UoM & MOQ: Extract the unit of measure and MOQ.
-      4. COMMERCIALS: Extract taxes, discounts, shipping, and warranty. If not explicitly stated, use 0 or "None".
+      4. COMMERCIALS & CONDITIONS: Extract taxes, immediate flat discounts, shipping, and warranty. 
+         CRITICAL: If a discount is CONDITIONAL (e.g., "30% off on cash payment") or a price change is in the FUTURE (e.g., "20% increase post Dec"), you MUST put it in "conditional_notes" array. Do NOT put it in "immediate_discount_pct".
       
       Return ONLY a pure valid JSON object with this exact schema:
       {
         "vendor_name": "${vendorName}",
         "commercials": {
-          "currency": "String",
-          "payment_terms_days": "Number",
+          "currency": "String (e.g., INR, USD, EUR)",
+          "payment_terms": "String",
           "freight_terms": "String",
           "warranty_terms": "String (e.g., 1 Year, None)",
-          "discount_pct": "Number (default 0)",
+          "immediate_discount_pct": "Number (ONLY if unconditional flat discount, else 0)",
           "tax_pct": "Number (default 0)",
-          "shipping_cost_flat": "Number (default 0)"
+          "shipping_cost_flat": "Number (default 0)",
+          "conditional_notes": ["Array of Strings detailing conditional discounts, future price hikes, etc."]
         },
         "line_items": [
           {
@@ -57,8 +59,6 @@ export async function POST(req: Request) {
       if (!geminiApiKey) throw new Error("Gemini key missing");
 
       const genAI = new GoogleGenerativeAI(geminiApiKey);
-      
-      // FIX 1: Enforce Strict JSON Mode on the Gemini Model
       const model = genAI.getGenerativeModel({ 
         model: "gemini-1.5-flash",
         generationConfig: { responseMimeType: "application/json" }
@@ -82,7 +82,6 @@ export async function POST(req: Request) {
         ? [ { type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${mimeType};base64,${buffer.toString("base64")}` } } ]
         : [ { type: "text", text: `${prompt}\n\nDocument Data:\n${buffer.toString("utf-8")}` } ];
 
-      // FIX 2: Enforce Strict JSON Mode on OpenRouter Fallback
       const completion = await openai.chat.completions.create({
         model: fallbackModel,
         messages: [{ role: "user", content: messageContent }],
@@ -91,7 +90,6 @@ export async function POST(req: Request) {
       rawText = completion?.choices?.[0]?.message?.content || "{}";
     }
 
-    // Safely extract the JSON block just in case
     let cleanJson = rawText.replace(/```json|```/g, "").trim();
     const startIndex = cleanJson.indexOf('{');
     const endIndex = cleanJson.lastIndexOf('}');
@@ -108,25 +106,6 @@ export async function POST(req: Request) {
       }
     });
     parsedData.line_items = Array.from(uniqueItems.values());
-
-    // --- REGENERATE SCORECARD & COMMERCIAL INSIGHTS ---
-    const pTerms = Number(parsedData.commercials?.payment_terms_days) || 0;
-    const warranty = parsedData.commercials?.warranty_terms || "None";
-    const discount = Number(parsedData.commercials?.discount_pct) || 0;
-    
-    let insights = [];
-    if (pTerms === 0) insights.push("⚠️ Advance payment requested.");
-    else if (pTerms >= 30) insights.push(`✅ Favorable Net ${pTerms} terms.`);
-    
-    if (warranty.toLowerCase() !== "none") insights.push(`🛡️ Warranty: ${warranty}`);
-    if (discount > 0) insights.push(`🏷️ ${discount}% Discount Applied`);
-
-    parsedData.vendor_scorecard = {
-      shipping_lead_time_days: Math.floor(Math.random() * 20) + 5,
-      compliance_score: Math.floor(Math.random() * 15) + 85,
-      market_risk_rating: (Math.random() * 1.5 + 3.5).toFixed(1),
-      commercial_insights: insights
-    };
 
     return NextResponse.json(parsedData);
   } catch (err: any) {
