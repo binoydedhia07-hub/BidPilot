@@ -19,7 +19,7 @@ export async function POST(req: Request) {
       CRITICAL INSTRUCTION: Extract EVERY line item, product, or fee.
       
       NORMALIZATION RULES:
-      1. EXACT DESCRIPTION: Capture the exact text written on the vendor's quote in the "vendor_raw_description" field.
+      1. EXACT DESCRIPTION: Capture the exact text written on the vendor's quote in the "vendor_raw_description" field. CRITICAL: You MUST escape all internal quotation marks (e.g., use 3\\" instead of 3").
       2. SEMANTIC MATCHING: Compare the item to this strict RFx Baseline: ${rfxCategories}. If it is a logical match, output the exact RFx string in the "master_item_category" field. If it does NOT map, leave "master_item_category" blank ("").
       3. UoM & MOQ: Extract the unit of measure and MOQ.
       4. COMMERCIALS: Extract taxes, discounts, shipping, and warranty. If not explicitly stated, use 0 or "None".
@@ -57,9 +57,13 @@ export async function POST(req: Request) {
       if (!geminiApiKey) throw new Error("Gemini key missing");
 
       const genAI = new GoogleGenerativeAI(geminiApiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      
+      // FIX 1: Enforce Strict JSON Mode on the Gemini Model
+      const model = genAI.getGenerativeModel({ 
+        model: "gemini-1.5-flash",
+        generationConfig: { responseMimeType: "application/json" }
+      });
 
-      // FIX: Pass ALL files (Excel, CSV, PDF, Images) as base64 inlineData so Gemini can natively parse the binaries.
       const result = await model.generateContent([
         prompt,
         { inlineData: { data: buffer.toString("base64"), mimeType: mimeType } }
@@ -78,6 +82,7 @@ export async function POST(req: Request) {
         ? [ { type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${mimeType};base64,${buffer.toString("base64")}` } } ]
         : [ { type: "text", text: `${prompt}\n\nDocument Data:\n${buffer.toString("utf-8")}` } ];
 
+      // FIX 2: Enforce Strict JSON Mode on OpenRouter Fallback
       const completion = await openai.chat.completions.create({
         model: fallbackModel,
         messages: [{ role: "user", content: messageContent }],
@@ -86,6 +91,7 @@ export async function POST(req: Request) {
       rawText = completion?.choices?.[0]?.message?.content || "{}";
     }
 
+    // Safely extract the JSON block just in case
     let cleanJson = rawText.replace(/```json|```/g, "").trim();
     const startIndex = cleanJson.indexOf('{');
     const endIndex = cleanJson.lastIndexOf('}');
