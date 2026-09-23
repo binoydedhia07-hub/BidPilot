@@ -89,7 +89,7 @@ export async function POST(req: Request) {
     const cleanJson = rawText.replace(/```json|```/g, "").trim();
     const parsedData = JSON.parse(cleanJson);
 
-    // TCO Normalization & Scorecard Engine (Replace existing scorecard generation with this)
+    // TCO Normalization & Scorecard Engine
     const baseCurrency = parsedData.commercials?.currency?.toUpperCase() || "INR";
     let totalVendorSpend = 0;
     
@@ -153,3 +153,9 @@ export async function POST(req: Request) {
       total_landed_spend: totalVendorSpend,
       commercial_insights: insights
     };
+
+    return NextResponse.json(parsedData);
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}
