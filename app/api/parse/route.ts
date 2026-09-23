@@ -80,8 +80,11 @@ export async function POST(req: Request) {
       // Explicitly force a vision model if the file is an image
       // Explicitly force a vision model if the file is an image
       // Explicitly force a vision model if the file is an image
+      // SMART FALLBACK: 
+      // Images go to a highly stable, low-cost premium vision model.
+      // CSVs/Text continue to use the free dynamic router.
       const fallbackModel = isImage 
-        ? "qwen/qwen-2-vl-7b-instruct:free" 
+        ? "openai/gpt-4o-mini" 
         : "openrouter/free";
 
       const completion = await openai.chat.completions.create({
