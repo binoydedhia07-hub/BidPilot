@@ -97,9 +97,26 @@ export async function POST(req: Request) {
       let baseRate = Number(item.unit_price) || 0;
       let conversionLog = [];
 
-      if ((item.quoted_uom || "").toLowerCase().includes("1000")) {
-        baseRate = baseRate / 1000;
-        conversionLog.push("Per 1k to Unit");
+      const uomStr = (item.quoted_uom || "").toLowerCase();
+      let divisor = 1;
+
+      // Detect "k" shorthand (e.g., "1k", "5k")
+      const kMatch = uomStr.match(/(\d+)k/);
+      if (kMatch) {
+        divisor = parseInt(kMatch[1]) * 1000;
+      } else {
+        // Detect any standard number (e.g., "per 500", "100 pcs")
+        const numMatch = uomStr.match(/(\d+)/);
+        if (numMatch) {
+          const parsedNum = parseInt(numMatch[1]);
+          if (parsedNum > 1) divisor = parsedNum;
+        }
+      }
+
+      // Apply dynamic math if bulk pricing is detected
+      if (divisor > 1) {
+        baseRate = baseRate / divisor;
+        conversionLog.push(`Per ${divisor} to Unit Rate`);
       }
 
       const freightStr = (parsedData.commercials?.freight_terms || "").toLowerCase();
