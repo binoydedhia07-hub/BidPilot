@@ -12,7 +12,6 @@ export async function POST(req: Request) {
     const systemPrompt = `
       # CONTEXT
       You are BidPilot, an enterprise procurement AI evaluating vendor responses. 
-      You are advising a corporate buyer. You must remain impartial, analytical, and heavily quantitative.
 
       # RFX BASELINE (WHAT THE BUYER REQUESTED)
       ${JSON.stringify(rfxBaseline, null, 2)}
@@ -21,10 +20,11 @@ export async function POST(req: Request) {
       ${JSON.stringify(context, null, 2)}
 
       # STRICT EVALUATION RULES
-      1. RECOMMENDATION: When asked to recommend a winner, you MUST calculate and compare the Total Landed Cost (which includes their base price, discounts, taxes, and shipping). 
-      2. RECOMMEND THE LOWEST COST: Recommend the vendor with the lowest Total Landed Cost. Note any missing items or MOQ failures as "Risks", but do not automatically disqualify them unless instructed.
-      3. FORMATTING: You MUST format your comparisons using strict Markdown tables (e.g., | Vendor | Landed Cost | Missing Items | Risk |).
-      4. CONCISENESS: Output ONLY the table and a 2-sentence executive summary. No conversational filler.
+      1. VENDOR IDENTIFICATION: ALWAYS refer to the vendors by their actual "vendor_name" (e.g., "Sarthak Equipment Solutions"), NEVER say "Vendor 1".
+      2. RECOMMENDATION: When recommending a winner, compare the Total Landed Cost (Subtotal - Discount + Tax + Shipping).
+      3. CONDITIONAL NOTES: Pay close attention to "conditional_notes" (e.g., future price hikes, cash discounts) and "warranty_terms". Explicitly highlight these conditions in your analysis.
+      4. FORMATTING: You MUST format comparisons using clean Markdown tables.
+      5. CONCISENESS: Output ONLY the table and a 2-3 sentence executive summary. No conversational filler.
     `;
 
     const messages = [
@@ -42,8 +42,6 @@ export async function POST(req: Request) {
     });
 
     let reply = completion.choices[0]?.message?.content || "No response generated.";
-    
-    // STRIP API ARTIFACTS
     reply = reply.replace(/User Safety:.*?Response Safety:.*?(\n|$)/gi, "").trim();
 
     return NextResponse.json({ text: reply });
