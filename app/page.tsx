@@ -48,7 +48,6 @@ export default function Dashboard() {
     return { match: false, multiplier: 1 };
   };
 
-  // Retrieves estimated FX rate assuming base is INR
   const getFxRate = (currency: string) => {
     const c = (currency || "INR").toUpperCase();
     if (c.includes("USD")) return 83.50;
@@ -103,7 +102,6 @@ export default function Dashboard() {
           if (autoConv.match) {
             hitlResolved = true;
             conversionMultiplier = autoConv.multiplier;
-            // Base conversion to INR
             normalizedPrice = ((Number(item.unit_price) || 0) * fxRate) / conversionMultiplier;
           }
         }
@@ -228,6 +226,7 @@ export default function Dashboard() {
                         <div className="font-bold text-base text-white mb-1">{v.vendor_name}</div>
                         {currency !== "INR" && <div className="text-[10px] text-blue-400 mb-2">Quoted in {currency} (Est. 1 = ₹{fxRate.toFixed(2)})</div>}
                         
+                        {/* MATH BREAKDOWN */}
                         <div className="bg-slate-900 border border-slate-800 rounded p-2 mb-3">
                           <div className="flex justify-between text-slate-400 mb-1"><span>Subtotal:</span> <span>₹{math.subtotal.toFixed(2)}</span></div>
                           {math.discountPct > 0 && <div className="flex justify-between text-emerald-400 mb-1"><span>Discount ({math.discountPct}%):</span> <span>- ₹{math.discountAmt.toFixed(2)}</span></div>}
@@ -239,18 +238,49 @@ export default function Dashboard() {
                           </div>
                         </div>
 
+                        {/* CONDITIONS & WARRANTY */}
                         <div className="space-y-1 mb-2">
                           <div className={`text-[10px] p-1.5 rounded ${warranty !== "None" ? "bg-blue-900/30 text-blue-300 border border-blue-800" : "bg-slate-800 text-slate-500"}`}>
                             🛡️ Warranty: {warranty}
                           </div>
                           
-                          {/* DYNAMIC CONDITIONAL PRICING BANNERS */}
                           {v.commercials?.conditional_notes?.map((note: string, idx: number) => (
                             <div key={idx} className="text-[10px] leading-tight text-amber-300 bg-amber-900/40 border border-amber-700/50 p-1.5 rounded">
                               ⚠️ {note}
                             </div>
                           ))}
                         </div>
+
+                        {/* RESTORED VENDOR SCORECARD (COLLAPSIBLE) */}
+                        {v.vendor_scorecard && (
+                          <details className="mt-3 group">
+                            <summary className="text-[10px] text-blue-400 cursor-pointer hover:text-blue-300 font-medium flex items-center justify-between bg-blue-900/20 p-2 rounded border border-blue-900/50 list-none [&::-webkit-details-marker]:hidden transition">
+                              <span>📊 View Scorecard & Risk</span>
+                              <span className="group-open:rotate-180 transition-transform">▼</span>
+                            </summary>
+                            <div className="mt-2 p-2 bg-slate-900/80 border border-slate-700/50 rounded space-y-2 text-[10px] shadow-inner">
+                              <div className="flex justify-between border-b border-slate-700/50 pb-1">
+                                <span className="text-slate-400">Risk Rating:</span>
+                                <span className="text-white font-medium">{v.vendor_scorecard.market_risk_rating}/5.0</span>
+                              </div>
+                              <div className="flex justify-between border-b border-slate-700/50 pb-1">
+                                <span className="text-slate-400">Compliance:</span>
+                                <span className="text-white font-medium">{v.vendor_scorecard.compliance_score}%</span>
+                              </div>
+                              <div className="flex justify-between border-b border-slate-700/50 pb-1">
+                                <span className="text-slate-400">Lead Time:</span>
+                                <span className="text-white font-medium">{v.vendor_scorecard.shipping_lead_time_days} days</span>
+                              </div>
+                              {v.vendor_scorecard.commercial_insights?.length > 0 && (
+                                <div className="pt-1 space-y-1">
+                                  {v.vendor_scorecard.commercial_insights.map((insight: string, idx: number) => (
+                                    <div key={idx} className="text-slate-300 bg-slate-800/80 p-1.5 rounded leading-tight">{insight}</div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </details>
+                        )}
                       </th>
                     );
                   })}
