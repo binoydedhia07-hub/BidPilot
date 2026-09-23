@@ -48,6 +48,15 @@ export default function Dashboard() {
     return { match: false, multiplier: 1 };
   };
 
+  // Retrieves estimated FX rate assuming base is INR
+  const getFxRate = (currency: string) => {
+    const c = (currency || "INR").toUpperCase();
+    if (c.includes("USD")) return 83.50;
+    if (c.includes("EUR")) return 90.20;
+    if (c.includes("GBP")) return 105.00;
+    return 1.0;
+  };
+
   const handleFileUpload = async (e: any) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -63,6 +72,8 @@ export default function Dashboard() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       
+      const fxRate = getFxRate(data.commercials?.currency);
+
       const isFuzzyMatch = (s1: string, s2: string) => {
         if (!s1 || !s2) return false;
         const n1 = s1.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -92,7 +103,8 @@ export default function Dashboard() {
           if (autoConv.match) {
             hitlResolved = true;
             conversionMultiplier = autoConv.multiplier;
-            normalizedPrice = (Number(item.unit_price) || 0) / conversionMultiplier;
+            // Base conversion to INR
+            normalizedPrice = ((Number(item.unit_price) || 0) * fxRate) / conversionMultiplier;
           }
         }
 
@@ -146,7 +158,6 @@ export default function Dashboard() {
     return (v.line_items || []).filter((i: any) => !occupiedItems.includes(i));
   };
 
-  // RETURNS A DETAILED MATH BREAKDOWN
   const calculateVendorMath = (v: any) => {
     let subtotal = 0;
     rfxBaseline.forEach(rfx => {
@@ -161,7 +172,7 @@ export default function Dashboard() {
       }
     });
 
-    const discountPct = Number(v.commercials?.discount_pct) || 0;
+    const discountPct = Number(v.commercials?.immediate_discount_pct) || 0;
     const taxPct = Number(v.commercials?.tax_pct) || 0;
     const shippingFlat = Number(v.commercials?.shipping_cost_flat) || 0;
 
@@ -204,15 +215,18 @@ export default function Dashboard() {
                 <tr className="border-b-2 border-slate-700 bg-slate-900">
                   <th className="p-3 w-1/4 align-top">
                     <div className="font-bold text-white mb-4">Requirement</div>
-                    <div className="text-xs text-slate-500 uppercase tracking-wider">Landed Cost Calculation</div>
+                    <div className="text-xs text-slate-500 uppercase tracking-wider">Landed Cost (INR)</div>
                   </th>
                   {vendorData.map((v, i) => {
                     const math = calculateVendorMath(v);
                     const warranty = v.commercials?.warranty_terms || "None";
+                    const currency = (v.commercials?.currency || "INR").toUpperCase();
+                    const fxRate = getFxRate(currency);
                     
                     return (
                       <th key={i} className="p-3 font-normal text-xs align-top border-l border-slate-800 w-1/3">
-                        <div className="font-bold text-base text-white mb-2">{v.vendor_name}</div>
+                        <div className="font-bold text-base text-white mb-1">{v.vendor_name}</div>
+                        {currency !== "INR" && <div className="text-[10px] text-blue-400 mb-2">Quoted in {currency} (Est. 1 = ₹{fxRate.toFixed(2)})</div>}
                         
                         <div className="bg-slate-900 border border-slate-800 rounded p-2 mb-3">
                           <div className="flex justify-between text-slate-400 mb-1"><span>Subtotal:</span> <span>₹{math.subtotal.toFixed(2)}</span></div>
@@ -221,7 +235,7 @@ export default function Dashboard() {
                           {math.shippingFlat > 0 && <div className="flex justify-between text-red-400 mb-1"><span>Shipping:</span> <span>+ ₹{math.shippingFlat.toFixed(2)}</span></div>}
                           
                           <div className="border-t border-slate-700 mt-2 pt-2 flex justify-between font-bold text-lg text-emerald-400">
-                            <span>Total:</span> <span>₹{math.landedCost.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}</span>
+                            <span>Total INR:</span> <span>₹{math.landedCost.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}</span>
                           </div>
                         </div>
 
@@ -229,8 +243,12 @@ export default function Dashboard() {
                           <div className={`text-[10px] p-1.5 rounded ${warranty !== "None" ? "bg-blue-900/30 text-blue-300 border border-blue-800" : "bg-slate-800 text-slate-500"}`}>
                             🛡️ Warranty: {warranty}
                           </div>
-                          {v.vendor_scorecard?.commercial_insights?.map((insight: string, idx: number) => (
-                            <div key={idx} className="text-[10px] text-slate-300 bg-slate-800/50 p-1.5 rounded">{insight}</div>
+                          
+                          {/* DYNAMIC CONDITIONAL PRICING BANNERS */}
+                          {v.commercials?.conditional_notes?.map((note: string, idx: number) => (
+                            <div key={idx} className="text-[10px] leading-tight text-amber-300 bg-amber-900/40 border border-amber-700/50 p-1.5 rounded">
+                              ⚠️ {note}
+                            </div>
                           ))}
                         </div>
                       </th>
@@ -249,7 +267,7 @@ export default function Dashboard() {
                     {vendorData.map((v, colIdx) => {
                       const vItem = v.line_items?.find((i: any) => i.master_item_category === rfxItem.category && !i.is_extra);
 
-                      // STATE 1: MISSING & MANUAL MAP
+                      // STATE 1: MISSING
                       if (!vItem) {
                         const availableItems = getAvailableItemsForVendor(v);
                         return (
@@ -264,6 +282,7 @@ export default function Dashboard() {
                                   if (!desc) return;
                                   setVendorData(prev => prev.map((vend, id) => {
                                     if (id !== colIdx) return vend;
+                                    const fxRate = getFxRate(vend.commercials?.currency);
                                     return {
                                       ...vend,
                                       line_items: vend.line_items.map((it: any) => {
@@ -276,7 +295,7 @@ export default function Dashboard() {
                                             semantic_confirmed: true, 
                                             hitl_resolved: autoConv.match,
                                             conversion_multiplier: autoConv.multiplier,
-                                            normalized_price_inr: autoConv.match ? ((Number(it.unit_price) || 0) / autoConv.multiplier) : 0
+                                            normalized_price_inr: autoConv.match ? (((Number(it.unit_price) || 0) * fxRate) / autoConv.multiplier) : 0
                                           };
                                         }
                                         return it;
@@ -295,7 +314,7 @@ export default function Dashboard() {
                         );
                       }
 
-                      // STATE 2: AI SEMANTIC GUESS PENDING
+                      // STATE 2: AI GUESS
                       if (!vItem.semantic_confirmed) {
                         return (
                           <td key={colIdx} className="p-0 border-l border-slate-800 align-top bg-amber-950/20">
@@ -306,6 +325,7 @@ export default function Dashboard() {
                                 <button 
                                   onClick={() => setVendorData(prev => prev.map((vend, id) => {
                                     if (id !== colIdx) return vend;
+                                    const fxRate = getFxRate(vend.commercials?.currency);
                                     return {
                                       ...vend,
                                       line_items: vend.line_items.map((it: any) => {
@@ -316,7 +336,7 @@ export default function Dashboard() {
                                           semantic_confirmed: true,
                                           hitl_resolved: autoConv.match,
                                           conversion_multiplier: autoConv.multiplier,
-                                          normalized_price_inr: autoConv.match ? ((Number(it.unit_price) || 0) / autoConv.multiplier) : 0
+                                          normalized_price_inr: autoConv.match ? (((Number(it.unit_price) || 0) * fxRate) / autoConv.multiplier) : 0
                                         }
                                       })
                                     }
@@ -331,7 +351,7 @@ export default function Dashboard() {
                         );
                       }
 
-                      // STATE 3: UOM CONVERSION PENDING
+                      // STATE 3: UNIT MISMATCH
                       if (!vItem.hitl_resolved) {
                         return (
                           <td key={colIdx} className="p-0 border-l border-slate-800 align-top bg-blue-950/20">
@@ -355,11 +375,12 @@ export default function Dashboard() {
                                 onClick={() => {
                                   setVendorData(prev => prev.map((vend, id) => {
                                     if (id !== colIdx) return vend;
+                                    const fxRate = getFxRate(vend.commercials?.currency);
                                     return {
                                       ...vend,
                                       line_items: vend.line_items.map((it: any) => {
                                         if (it !== vItem) return it;
-                                        return { ...it, normalized_price_inr: (Number(it.unit_price) || 0) / (it.conversion_multiplier || 1), hitl_resolved: true };
+                                        return { ...it, normalized_price_inr: ((Number(it.unit_price) || 0) * fxRate) / (it.conversion_multiplier || 1), hitl_resolved: true };
                                       })
                                     };
                                   }));
@@ -372,7 +393,7 @@ export default function Dashboard() {
                         );
                       }
 
-                      // STATE 4: SUCCESS / RENDER DATA
+                      // STATE 4: SUCCESS
                       const hasMOQIssue = vItem.moq_required > rfxItem.req_qty;
                       return (
                         <td key={colIdx} className="p-0 border-l border-slate-800 align-top group relative">
@@ -398,6 +419,38 @@ export default function Dashboard() {
                     })}
                   </tr>
                 ))}
+                
+                {/* RENDER EXTRAS & UNMAPPED AT BOTTOM */}
+                {getAllExtras().length > 0 && (
+                  <>
+                    <tr className="bg-slate-900/80">
+                      <td colSpan={vendorData.length + 1} className="p-3 text-xs font-bold text-purple-400 uppercase tracking-wider border-t-2 border-slate-700">
+                        Unmapped & Additional Items
+                      </td>
+                    </tr>
+                    {getAllExtras().map((extraDesc, rowIdx) => (
+                      <tr key={`extra-${rowIdx}`} className="hover:bg-slate-900/50 transition h-20">
+                        <td className="p-3 align-top">
+                          <div className="font-medium text-slate-400">{extraDesc}</div>
+                          <div className="text-[10px] text-slate-600 mt-1 uppercase tracking-wider">Awaiting Assignment</div>
+                        </td>
+                        {vendorData.map((v, colIdx) => {
+                          const availableItems = getAvailableItemsForVendor(v);
+                          const vItem = availableItems.find((i: any) => i.vendor_raw_description === extraDesc);
+                          
+                          if (!vItem) return <td key={colIdx} className="p-3 border-l border-slate-800" />;
+                          return (
+                            <td key={colIdx} className="p-3 border-l border-slate-800 align-top">
+                              <div className="font-semibold text-purple-400">
+                                ₹{(Number(vItem.unit_price) * getFxRate(v.commercials?.currency)).toFixed(2)} <span className="text-[10px] text-slate-500 font-normal">/ {vItem.quoted_uom || "unit"}</span>
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </>
+                )}
               </tbody>
             </table>
           )}
@@ -422,6 +475,7 @@ export default function Dashboard() {
         {vendorData.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
             <button onClick={() => askCopilot("🏆 Recommend Winner", "Calculate the Total Landed Cost (including discounts, taxes, shipping). Recommend the vendor with the lowest landed cost. Output a Markdown table comparing the costs.")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">🏆 Recommend Winner</button>
+            <button onClick={() => askCopilot("📦 Check Availability", "Which vendors are missing items from the RFx baseline?")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">📦 Check Availability</button>
           </div>
         )}
         <div className="flex gap-2">
