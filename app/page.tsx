@@ -69,25 +69,48 @@ export default function Dashboard() {
           </label>
         </div>
 
-        {/* --- HITL TRUE NORMALIZATION & RESOLUTION QUEUE --- */}
-        {vendorData.length > 0 && vendorData.some(v => 
-          v.line_items?.some((item: any) => {
+        {/* --- HITL AMBIGUITY & RECONCILIATION QUEUE --- */}
+        {vendorData.length > 0 && vendorData.some((v, vIdx) => {
+          // Establish Vendor 1 as the baseline for all categories
+          const baselineCategories = vendorData[0]?.line_items?.map((i: any) => i.master_item_category || i.description) || [];
+          
+          return v.line_items?.some((item: any) => {
             const uom = (item.quoted_uom || "").trim().toLowerCase();
             const isMissingUnit = !uom || /^\d+$/.test(uom);
-            const needsNormalization = isMissingUnit || !item.target_base_uom || uom !== item.target_base_uom.toLowerCase();
-            return (needsNormalization || !item.master_item_category) && !item.hitl_resolved;
-          })
-        ) && (
+            const isStandardPiece = ['pcs', 'piece', 'pieces', 'unit', 'units', 'each', 'nos', 'number', 'pp'].includes(uom);
+            
+            // Flag if the category doesn't perfectly match the baseline
+            const currentCat = item.master_item_category || item.description;
+            const isUnmappedCategory = vIdx > 0 && !baselineCategories.includes(currentCat);
+            
+            return (isMissingUnit || !isStandardPiece || isUnmappedCategory || !item.master_item_category) && !item.hitl_resolved;
+          });
+        }) && (
           <div className="mb-6 bg-amber-950/40 border border-amber-800/50 rounded-xl p-4 shadow-lg">
             <h3 className="text-amber-500 font-bold text-sm mb-3 flex items-center">
-              <span className="mr-2">⚠️</span> HITL Review: Normalize Units & Categories
+              <span className="mr-2">⚠️</span> HITL Review: Reconcile Categories & Units
             </h3>
+
+            {/* Datalist to populate the category dropdown with existing items */}
+            <datalist id="category-options">
+              {Array.from(new Set(vendorData.flatMap(v => v.line_items?.map((i: any) => i.master_item_category || i.description) || []))).filter(Boolean).map((cat: any) => (
+                <option key={cat} value={cat} />
+              ))}
+            </datalist>
+
             <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
-              {vendorData.map((v, vIdx) => 
-                v.line_items?.map((item: any, iIdx: number) => {
+              {vendorData.map((v, vIdx) => {
+                const baselineCategories = vendorData[0]?.line_items?.map((i: any) => i.master_item_category || i.description) || [];
+
+                return v.line_items?.map((item: any, iIdx: number) => {
                   const uom = (item.quoted_uom || "").trim().toLowerCase();
                   const isMissingUnit = !uom || /^\d+$/.test(uom);
-                  const needsReview = (isMissingUnit || !item.target_base_uom || uom !== (item.target_base_uom || "").toLowerCase() || !item.master_item_category) && !item.hitl_resolved;
+                  const isStandardPiece = ['pcs', 'piece', 'pieces', 'unit', 'units', 'each', 'nos', 'number', 'pp'].includes(uom);
+                  
+                  const currentCat = item.master_item_category || item.description;
+                  const isUnmappedCategory = vIdx > 0 && !baselineCategories.includes(currentCat);
+                  
+                  const needsReview = (isMissingUnit || !isStandardPiece || isUnmappedCategory || !item.master_item_category) && !item.hitl_resolved;
                   
                   if (!needsReview) return null;
 
@@ -99,12 +122,15 @@ export default function Dashboard() {
                         <span className="text-slate-500" title={item.vendor_raw_description || item.description}>"{item.vendor_raw_description || item.description}"</span>
                       </div>
                       
-                      <div className="flex-1 flex items-center gap-3">
+                      <div className="flex-1 flex items-center gap-4">
                         <div>
-                          <span className="text-slate-500 block text-[9px] uppercase tracking-wider mb-1">Master Category</span>
+                          <span className="text-slate-500 block text-[9px] uppercase tracking-wider mb-1">
+                            {isUnmappedCategory ? "⚠️ Map to Master Category" : "Master Category"}
+                          </span>
                           <input 
+                            list="category-options"
                             type="text" 
-                            className="bg-slate-950 border border-amber-700/50 rounded px-2 py-1 w-32 text-white focus:border-amber-500 outline-none transition text-xs"
+                            className={`bg-slate-950 border ${isUnmappedCategory ? 'border-red-500/50' : 'border-amber-700/50'} rounded px-2 py-1 w-48 text-white focus:border-amber-500 outline-none transition text-xs`}
                             value={item.master_item_category || item.description || ""}
                             onChange={(e) => {
                               const newCat = e.target.value;
@@ -117,39 +143,21 @@ export default function Dashboard() {
                           />
                         </div>
 
-                        <div className="flex items-center gap-2 border-l border-amber-900/30 pl-3">
+                        <div className="flex items-center gap-3 border-l border-amber-900/30 pl-4">
                           <div>
                             <span className="text-slate-500 block text-[9px] uppercase tracking-wider mb-1">Quoted UoM</span>
-                            <span className={`px-2 py-1 rounded font-medium text-xs ${isMissingUnit ? 'bg-red-900/50 text-red-200 border border-red-500/50' : 'bg-slate-800 text-amber-200'}`}>
+                            <span className={`px-2 py-1 rounded font-medium text-xs ${isMissingUnit || !isStandardPiece ? 'bg-red-900/50 text-red-200 border border-red-500/50' : 'bg-slate-800 text-amber-200'}`}>
                               {isMissingUnit ? "MISSING" : item.quoted_uom}
                             </span>
                           </div>
                           
-                          <div className="text-slate-500 mt-3">→</div>
-                          
-                          <div>
-                            <span className="text-slate-500 block text-[9px] uppercase tracking-wider mb-1">Target Base Unit</span>
-                            <input 
-                              type="text" placeholder="e.g. g, pcs"
-                              className="bg-slate-950 border border-amber-700/50 rounded px-2 py-1 w-20 text-white focus:border-amber-500 outline-none transition text-xs"
-                              value={item.target_base_uom || ""}
-                              onChange={(e) => {
-                                setVendorData((prev) => {
-                                  const newData = [...prev];
-                                  newData[vIdx].line_items[iIdx].target_base_uom = e.target.value;
-                                  return newData;
-                                });
-                              }}
-                            />
-                          </div>
-
                           <div className="text-slate-500 mt-3">×</div>
 
                           <div>
-                            <span className="text-slate-500 block text-[9px] uppercase tracking-wider mb-1">Multiplier</span>
+                            <span className="text-slate-500 block text-[9px] uppercase tracking-wider mb-1">Conversion Multiplier</span>
                             <input 
                               type="number" min="0.0001" step="any"
-                              className="bg-slate-950 border border-amber-700/50 rounded px-2 py-1 w-16 text-white focus:border-amber-500 outline-none transition text-xs"
+                              className="bg-slate-950 border border-amber-700/50 rounded px-2 py-1 w-20 text-white focus:border-amber-500 outline-none transition text-xs"
                               value={item.conversion_multiplier || 1}
                               onChange={(e) => {
                                 const newMultiplier = Number(e.target.value) || 1;
@@ -193,7 +201,7 @@ export default function Dashboard() {
                     </div>
                   );
                 })
-              )}
+              })}
             </div>
           </div>
         )}
@@ -228,12 +236,10 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
-                {/* Dynamically extract all unique categories across all vendors */}
                 {Array.from(new Set(
                   vendorData.flatMap(v => v.line_items?.map((i: any) => i.master_item_category || i.description) || [])
                 )).filter(Boolean).map((categoryName: any, rowIdx: number) => {
                   
-                  // Extract the general required quantity for this row (if available from any vendor)
                   const generalReqQty = vendorData.flatMap(v => v.line_items || []).find((i: any) => (i.master_item_category || i.description) === categoryName)?.quoted_qty || 0;
 
                   return (
@@ -243,7 +249,6 @@ export default function Dashboard() {
                         <span className="block text-xs text-slate-500 mt-1">Req Qty: {generalReqQty}</span>
                       </td>
                       {vendorData.map((v, colIdx) => {
-                        // Find the exact item for this vendor based on the Master Category
                         const vItem = v.line_items?.find((i: any) => (i.master_item_category || i.description) === categoryName);
                         
                         if (!vItem || !vItem.normalized_price_inr) {
@@ -262,7 +267,7 @@ export default function Dashboard() {
                               "{vItem.vendor_raw_description || vItem.description}"
                             </div>
                             <div className={`font-semibold ${hasMOQIssue ? "text-red-400" : "text-emerald-400"}`}>
-                              ₹{vItem.normalized_price_inr.toFixed(2)} <span className="text-[10px] text-slate-500 font-normal">/ {vItem.target_base_uom || "unit"}</span>
+                              ₹{vItem.normalized_price_inr.toFixed(2)} <span className="text-[10px] text-slate-500 font-normal">/ unit</span>
                             </div>
                             {hasMOQIssue && <div className="text-[10px] text-red-500 font-bold mt-1 uppercase tracking-wider">MOQ Failed: {vItem.moq_required} req</div>}
                           </td>
@@ -295,7 +300,6 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* Prompt Chips in Chat Area */}
         {vendorData.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
             <button 
