@@ -7,34 +7,41 @@ export async function POST(req: Request) {
     const formData = await req.formData();
     const file = formData.get("file") as File;
     const vendorName = (formData.get("vendorName") as string) || "Vendor";
+    
+    // 1. CAPTURE THE RFX CATEGORIES FROM THE FRONTEND
+    const rfxCategories = formData.get("rfxCategories") || "[]";
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const isImage = file.type.startsWith("image/");
 
+    // 2. INJECT THE BASELINE INTO THE AI PROMPT
     const prompt = `
       You are an expert enterprise procurement parsing engine.
-      Extract commercial terms, line items, and MOQs.
       
-      CRITICAL DEDUPLICATION RULE: If a document contains tiered pricing, merged cells, or multiple delivery schedules for the same item, CONSOLIDATE them. NEVER output duplicate line items with the same description. If an exact quantity is missing, return null rather than guessing.
-
+      CRITICAL NORMALIZATION RULES:
+      1. SEMANTIC MATCHING: Look at the item on the vendor's quote. Compare it to this strict RFx Baseline list: ${rfxCategories}. 
+         If the vendor's item is a logical match (e.g. "5-Ply Box" maps to "Heavy 5-Ply Cartons Master"), output the EXACT RFx string in the "master_item_category" field. 
+         If the vendor's item does NOT logically map to anything on that list, leave "master_item_category" blank ("").
+      2. EXACT DESCRIPTION: You MUST capture the exact text written on the vendor's quote in the "vendor_raw_description" field. This is critical for auditing.
+      3. UoM: Extract the stated unit of measure exactly as written (e.g., Pcs, Rolls, Carton, kg).
+      
       Return ONLY a pure valid JSON object with this exact schema:
       {
         "vendor_name": "${vendorName}",
         "commercials": {
           "currency": "String (e.g., USD, INR, EUR)",
           "payment_terms_days": "Number (e.g., 30 for Net 30, 0 for Advance)",
-          "early_payment_discount_pct": "Number (default 0)",
           "freight_terms": "String (e.g., Included, Ex-Works)"
         },
         "line_items": [
           {
             "id": 1,
-            "description": "String",
+            "vendor_raw_description": "String (Exactly as written on the quote)",
+            "master_item_category": "String (The matched RFx category, or empty string)",
             "quoted_qty": "Number",
             "quoted_uom": "String",
             "unit_price": "Number",
-            "moq_required": "Number (default 0)",
-            "source_citation": "String"
+            "moq_required": "Number (default 0)"
           }
         ]
       }
