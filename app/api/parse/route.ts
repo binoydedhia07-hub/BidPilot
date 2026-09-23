@@ -121,17 +121,21 @@ export async function POST(req: Request) {
       cleanJson = "{}";
     }
 
-    const parsedData = JSON.parse(cleanJson);
+   const parsedData = JSON.parse(cleanJson);
 
+    // --- DETERMINISTIC DEDUPLICATION GUARDRAIL ---
     const uniqueItems = new Map();
     (parsedData.line_items || []).forEach((item: any) => {
-      const key = (item.description || "unknown").toLowerCase().trim();
+      // FIX: Check both the new schema field and the old one
+      const desc = item.vendor_raw_description || item.description || "unknown";
+      const key = desc.toLowerCase().trim();
       
-      // If we haven't seen this item yet, or if this duplicate actually has a valid quantity/price while the previous one was 0, swap it.
       if (!uniqueItems.has(key) || (item.quoted_qty > 0 && uniqueItems.get(key).quoted_qty === 0)) {
         uniqueItems.set(key, item);
       }
     });
+    parsedData.line_items = Array.from(uniqueItems.values());
+    // ----------------------------------------------
     // Replace the bloated array with our cleaned, unique array
     parsedData.line_items = Array.from(uniqueItems.values());
 
