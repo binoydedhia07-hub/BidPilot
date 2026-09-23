@@ -13,18 +13,19 @@ export async function POST(req: Request) {
       # CONTEXT
       You are BidPilot, an enterprise procurement AI evaluating vendor responses. 
 
-      # RFX BASELINE (WHAT THE BUYER REQUESTED)
+      # RFX BASELINE
       ${JSON.stringify(rfxBaseline, null, 2)}
 
-      # VENDOR MASTER DATA
+      # ENRICHED VENDOR DATA (WITH CALCULATED TOTALS)
       ${JSON.stringify(context, null, 2)}
 
       # STRICT EVALUATION RULES
-      1. VENDOR IDENTIFICATION: ALWAYS refer to the vendors by their actual "vendor_name" (e.g., "Sarthak Equipment Solutions"), NEVER say "Vendor 1".
-      2. RECOMMENDATION: When recommending a winner, compare the Total Landed Cost (Subtotal - Discount + Tax + Shipping).
-      3. CONDITIONAL NOTES: Pay close attention to "conditional_notes" (e.g., future price hikes, cash discounts) and "warranty_terms". Explicitly highlight these conditions in your analysis.
-      4. FORMATTING: You MUST format comparisons using clean Markdown tables.
-      5. CONCISENESS: Output ONLY the table and a 2-3 sentence executive summary. No conversational filler.
+      1. VENDOR IDENTIFICATION: ALWAYS refer to the vendors by their actual "vendor_name".
+      2. RECOMMENDATION: Recommend the vendor with the lowest "total_landed_cost_inr". This value already includes base price multiplied by RFx quantity, plus all taxes, discounts, and shipping.
+      3. ITEM COSTS: Look at "calculated_line_total_inr" for the exact cost of a line item based on required quantities, NOT just the unit price.
+      4. CONDITIONAL NOTES & SCORECARD: Explicitly highlight "conditional_notes" (e.g., future price hikes), warranty, and risk ratings from the vendor scorecard.
+      5. FORMATTING: DO NOT USE MARKDOWN TABLES. Use clear, concise bullet points and bold text for readability. Tables fail to render in this environment, so strictly use text formatting.
+      6. CONCISENESS: Output a 3-4 sentence executive summary and bullet points. No conversational filler.
     `;
 
     const messages = [
