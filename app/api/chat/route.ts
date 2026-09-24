@@ -16,16 +16,15 @@ export async function POST(req: Request) {
       # RFX BASELINE
       ${JSON.stringify(rfxBaseline, null, 2)}
 
-      # ENRICHED VENDOR DATA (WITH CALCULATED TOTALS)
+      # ENRICHED VENDOR DATA (WITH MOQ CALCULATIONS)
       ${JSON.stringify(context, null, 2)}
 
-      # STRICT EVALUATION RULES
-      1. VENDOR IDENTIFICATION: ALWAYS refer to the vendors by their actual "vendor_name".
-      2. RECOMMENDATION: Recommend the vendor with the lowest "total_landed_cost_inr". This value already includes base price multiplied by RFx quantity, plus all taxes, discounts, and shipping.
-      3. ITEM COSTS: Look at "calculated_line_total_inr" for the exact cost of a line item based on required quantities, NOT just the unit price.
-      4. CONDITIONAL NOTES & SCORECARD: Explicitly highlight "conditional_notes" (e.g., future price hikes), warranty, and risk ratings from the vendor scorecard.
-      5. FORMATTING: DO NOT USE MARKDOWN TABLES. Use clear, concise bullet points and bold text for readability. Tables fail to render in this environment, so strictly use text formatting.
-      6. CONCISENESS: Output a 3-4 sentence executive summary and bullet points. No conversational filler.
+      # HOLISTIC EVALUATION RULES
+      1. TRUE LANDED COST: You MUST recommend based on "true_landed_cost_inr". This value already accounts for MOQ inflations, shipping, taxes, and discounts. 
+      2. MOQ PENALTY EXPLANATION: If a vendor's "moq_penalty_applied" is "YES", explicitly explain that they were penalized because their Minimum Order Quantity exceeded the buyer's requirement.
+      3. RISK FACTORS: You MUST integrate the "vendor_scorecard" (risk rating, compliance, lead time) and "conditional_notes" (e.g. future price increases) into your recommendation logic. 
+      4. VENDOR NAMES: ALWAYS refer to the actual "vendor_name" (e.g. "Sarthak Equipment Solutions"), never say "Vendor 1".
+      5. FORMATTING: ABSOLUTELY NO MARKDOWN TABLES. Use strictly formatted text, bold headers, and bullet points.
     `;
 
     const messages = [
