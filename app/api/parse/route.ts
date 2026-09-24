@@ -18,12 +18,19 @@ export async function POST(req: Request) {
       
       CRITICAL INSTRUCTION: Extract EVERY line item, product, or fee.
       
+      LOT PRICING & UNIT NORMALIZATION (CRITICAL):
+      - If a vendor quotes per lot/bundle (e.g. "$510.00 / 1000 pcs", "Rs 1000 for 1000 pieces", "Rs 200 for 10 rolls"):
+        1. Calculate the TRUE SINGLE-UNIT PRICE: divide the price by the lot quantity (e.g. 510 / 1000 = 0.51).
+        2. Set "unit_price" to this calculated single-unit figure.
+        3. Set "quoted_uom" to the base unit (e.g. "pieces", "rolls", "kg").
+        4. Set "quoted_qty" to the lot quantity (e.g. 1000).
+      
       NORMALIZATION RULES:
       1. EXACT DESCRIPTION: Capture the exact text written on the vendor's quote. Escape all quotation marks (e.g., 3\\").
       2. SEMANTIC MATCHING: Compare the item to this strict RFx Baseline: ${rfxCategories}. Map it to "master_item_category" if it logically matches, otherwise leave blank.
-      3. UoM & MOQ: Extract the unit of measure and MOQ.
-      4. COMMERCIALS & CONDITIONS: Extract taxes, immediate flat discounts, shipping, and warranty. 
-         CRITICAL: If a discount is CONDITIONAL (e.g., "30% off on cash payment") or a price change is in the FUTURE (e.g., "20% increase post Dec"), you MUST put it in "conditional_notes" array. Do NOT put it in "immediate_discount_pct".
+      3. UoM & MOQ: Extract the unit of measure and MOQ (default 0).
+      4. COMMERCIALS & CONDITIONS: Extract currency, taxes, immediate flat discounts, shipping, and warranty. 
+         CRITICAL: If a discount or rebate is conditional (e.g. "5% rebate if annual order volume exceeds $150,000") or refers to future changes ("20% increase post Dec"), put it in "conditional_notes". Do NOT put it in "immediate_discount_pct".
       
       Return ONLY a pure valid JSON object with this exact schema:
       {
@@ -33,10 +40,10 @@ export async function POST(req: Request) {
           "payment_terms": "String",
           "freight_terms": "String",
           "warranty_terms": "String (e.g., 1 Year, None)",
-          "immediate_discount_pct": "Number (ONLY if unconditional flat discount, else 0)",
+          "immediate_discount_pct": "Number (ONLY if unconditional, else 0)",
           "tax_pct": "Number (default 0)",
           "shipping_cost_flat": "Number (default 0)",
-          "conditional_notes": ["Array of Strings detailing conditional discounts, future price hikes, etc."]
+          "conditional_notes": ["Array of Strings"]
         },
         "line_items": [
           {
@@ -45,7 +52,7 @@ export async function POST(req: Request) {
             "master_item_category": "String",
             "quoted_qty": "Number",
             "quoted_uom": "String",
-            "unit_price": "Number (CRITICAL: MUST be the exact price for ONE single unit. If the vendor quotes a total block price, you MUST mathematically divide the total by quoted_qty to get the per-unit price)",
+            "unit_price": "Number (SINGLE UNIT PRICE ONLY)",
             "moq_required": "Number"
           }
         ]
