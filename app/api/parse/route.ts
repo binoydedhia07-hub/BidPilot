@@ -1,3 +1,5 @@
+export const maxDuration = 60;
+
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { OpenAI } from "openai";
 import { NextResponse } from "next/server";
@@ -13,7 +15,6 @@ export async function POST(req: Request) {
     const mimeType = file.type || "application/octet-stream";
     const isImage = mimeType.startsWith("image/") && !mimeType.includes("svg");
     
-    // PERFORMANCE OPTIMIZATION: Only base64-encode true binaries.
     const isBinary = isImage || mimeType.includes("pdf") || mimeType.includes("spreadsheet") || mimeType.includes("excel");
 
     const prompt = `
@@ -22,14 +23,12 @@ export async function POST(req: Request) {
       CRITICAL INSTRUCTION: Extract EVERY line item, product, or fee.
       
       LOT PRICING & UNIT NORMALIZATION (CRITICAL):
-      - If a vendor quotes per lot/bundle (e.g. "$510.00 / 1000 pcs", "Rs 1000 for 1000 pieces"):
-        1. Calculate TRUE SINGLE-UNIT PRICE: divide price by lot quantity (e.g. 510 / 1000 = 0.51).
-        2. Set "unit_price" to this calculated single-unit figure.
-        3. Set "quoted_uom" to base unit ("pieces", "rolls", "kg").
-        4. Set "quoted_qty" to lot quantity (e.g. 1000).
+      1. EXPLICIT UNIT PRICES: If the document provides a tabular "Unit Price" column, extract that EXACT number. DO NOT divide it by the "Quantity" column. (e.g., If Qty=4000, UoM=Carton, Unit Price=3350 -> unit_price must be 3350).
+      2. BULK TEXT STRINGS: ONLY divide if the text explicitly states a bulk lot price in a single string (e.g., "$510.00 per 1000 pcs" -> unit_price = 0.51).
+      3. PRESERVE VENDOR UoM: Extract the EXACT quoted UoM (e.g., "Carton", "Pallet", "pieces"). NEVER guess or calculate how many individual pieces are inside a Carton or Pallet.
       
       NORMALIZATION RULES:
-      1. EXACT DESCRIPTION: Capture exact text. Escape all quotation marks (e.g., 3\\").
+      1. EXACT DESCRIPTION: Capture exact text. Escape all quotation marks.
       2. SEMANTIC MATCHING (CRITICAL): Compare item to this strict RFx Baseline: ${rfxCategories}. If it logically matches, you MUST output the EXACT identical string from the baseline in the "master_item_category" field. If it does NOT map, leave it perfectly blank ("").
       3. UoM & MOQ: Extract unit of measure and MOQ (default 0).
       4. COMMERCIALS & CONDITIONS: Extract currency, taxes, immediate flat discounts, shipping, warranty. 
@@ -87,7 +86,6 @@ export async function POST(req: Request) {
 
       let timeoutId: any;
       const geminiPromise = model.generateContent(contents);
-      // Increased timeout to 25 seconds to prevent Gemini from failing on dense documents
       const timeoutPromise = new Promise((_, reject) => {
         timeoutId = setTimeout(() => reject(new Error("Gemini timeout - failing over")), 25000);
       });
@@ -102,8 +100,6 @@ export async function POST(req: Request) {
       if (!openRouterApiKey) throw new Error("API keys failed.");
 
       const openai = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey: openRouterApiKey });
-      
-      // Enforce gpt-4o-mini to guarantee strict JSON formatting on the fallback
       const fallbackModel = "openai/gpt-4o-mini"; 
       
       const messageContent: any[] = [{ type: "text", text: prompt }];
@@ -135,7 +131,6 @@ export async function POST(req: Request) {
     const endIndex = cleanJson.lastIndexOf('}');
     cleanJson = (startIndex !== -1 && endIndex !== -1) ? cleanJson.substring(startIndex, endIndex + 1) : "{}";
 
-    // Adding a try-catch specifically for the JSON parse to surface better logs if it ever breaks again
     let parsedData;
     try {
       parsedData = JSON.parse(cleanJson);
