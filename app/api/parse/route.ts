@@ -20,31 +20,25 @@ export async function POST(req: Request) {
     const prompt = `
       You are an expert enterprise procurement parsing engine.
       
-      CRITICAL INSTRUCTION: Extract EVERY line item, product, or fee.
-      
-      LOT PRICING & UNIT NORMALIZATION (CRITICAL):
-      1. EXPLICIT UNIT PRICES: If the document provides a tabular "Unit Price" column, extract that EXACT number. DO NOT divide it by the "Quantity" column. (e.g., If Qty=4000, UoM=Carton, Unit Price=3350 -> unit_price must be 3350).
-      2. BULK TEXT STRINGS: ONLY divide if the text explicitly states a bulk lot price in a single string (e.g., "$510.00 per 1000 pcs" -> unit_price = 0.51).
-      3. PRESERVE VENDOR UoM: Extract the EXACT quoted UoM (e.g., "Carton", "Pallet", "pieces"). NEVER guess or calculate how many individual pieces are inside a Carton or Pallet.
-      
-      NORMALIZATION RULES:
-      1. EXACT DESCRIPTION: Capture exact text. Escape all quotation marks.
-      2. SEMANTIC MATCHING (CRITICAL): Compare item to this strict RFx Baseline: ${rfxCategories}. If it logically matches, you MUST output the EXACT identical string from the baseline in the "master_item_category" field. If it does NOT map, leave it perfectly blank ("").
-      3. UoM & MOQ: Extract unit of measure and MOQ (default 0).
-      4. COMMERCIALS & CONDITIONS: Extract currency, taxes, immediate flat discounts, shipping, warranty. 
-         If conditional or future ("5% rebate on X", "20% increase post Dec"), put in "conditional_notes" array.
+      CRITICAL INSTRUCTIONS FOR MATH, MOQs, AND CURRENCY (READ CAREFULLY):
+      1. LOT PRICING (DIVISION REQUIRED): If a vendor quotes a bulk lot (e.g., "$510.00 / 1000 pcs"), you MUST mathematically divide the price by the lot size to get the single-unit price (e.g., 510 / 1000 = 0.51). Set "unit_price": 0.51.
+      2. TABULAR UNIT PRICES (NO DIVISION): If the quote has explicit columns for "Qty" and "Unit Price" (e.g., Qty=4000, Unit Price=3350), DO NOT DIVIDE. The "unit_price" is exactly 3350.
+      3. CLEAN UoM: "quoted_uom" MUST be letters only (e.g., "pieces", "rolls", "Carton"). NEVER put numbers in the UoM.
+      4. MOQ REQUIRED: You MUST extract the Minimum Order Quantity (MOQ). If the text says "MOQ 10000", set "moq_required": 10000. If no MOQ is stated, set 0.
+      5. CURRENCY: You MUST extract the currency (e.g., USD, INR, EUR) and place it in "commercials.currency".
+      6. EXACT BASELINE MATCH: Compare item to: ${rfxCategories}. If it matches, "master_item_category" MUST be the EXACT identical string. If it does not map, leave blank "".
       
       Return ONLY a pure valid JSON object with this exact schema:
       {
         "vendor_name": "${vendorName}",
         "commercials": {
-          "currency": "String (e.g., INR, USD, EUR)",
+          "currency": "String",
           "payment_terms": "String",
           "freight_terms": "String",
           "warranty_terms": "String",
-          "immediate_discount_pct": "Number (ONLY if unconditional, else 0)",
-          "tax_pct": "Number (default 0)",
-          "shipping_cost_flat": "Number (default 0)",
+          "immediate_discount_pct": "Number",
+          "tax_pct": "Number",
+          "shipping_cost_flat": "Number",
           "conditional_notes": ["Array of Strings"]
         },
         "line_items": [
@@ -73,7 +67,7 @@ export async function POST(req: Request) {
         generationConfig: { 
           responseMimeType: "application/json",
           maxOutputTokens: 4096, 
-          temperature: 0.1 
+          temperature: 0.0 
         }
       });
 
@@ -121,7 +115,7 @@ export async function POST(req: Request) {
         messages: [{ role: "user", content: messageContent }],
         response_format: { type: "json_object" },
         max_tokens: 4096,
-        temperature: 0.1
+        temperature: 0.0
       });
       rawText = completion?.choices?.[0]?.message?.content || "{}";
     }
@@ -135,7 +129,6 @@ export async function POST(req: Request) {
     try {
       parsedData = JSON.parse(cleanJson);
     } catch (jsonErr: any) {
-      console.error("JSON Parse failed on string:", cleanJson);
       throw new Error(`JSON Formatting Error: ${jsonErr.message}`);
     }
 
