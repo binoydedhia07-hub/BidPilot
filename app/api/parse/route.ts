@@ -45,7 +45,7 @@ export async function POST(req: Request) {
             "master_item_category": "String",
             "quoted_qty": "Number",
             "quoted_uom": "String",
-            "unit_price": "Number",
+            "unit_price": "Number (CRITICAL: MUST be the exact price for ONE single unit. If the vendor quotes a total block price, you MUST mathematically divide the total by quoted_qty to get the per-unit price)",
             "moq_required": "Number"
           }
         ]
