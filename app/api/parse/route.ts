@@ -73,7 +73,7 @@ export async function POST(req: Request) {
         model: "gemini-1.5-flash",
         generationConfig: { 
           responseMimeType: "application/json",
-          maxOutputTokens: 4096, // Increased to prevent truncated JSON
+          maxOutputTokens: 4096, 
           temperature: 0.1 
         }
       });
@@ -87,21 +87,24 @@ export async function POST(req: Request) {
 
       let timeoutId: any;
       const geminiPromise = model.generateContent(contents);
+      // Increased timeout to 25 seconds to prevent Gemini from failing on dense documents
       const timeoutPromise = new Promise((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error("Gemini timeout - fast failing over")), 8500);
+        timeoutId = setTimeout(() => reject(new Error("Gemini timeout - failing over")), 25000);
       });
 
       const result: any = await Promise.race([geminiPromise, timeoutPromise]);
-      clearTimeout(timeoutId); // Prevents the function from hanging on Vercel
+      clearTimeout(timeoutId); 
       rawText = result.response.text();
       
     } catch (geminiErr) {
-      console.warn("Fast failover to OpenRouter triggered...", geminiErr);
+      console.warn("Failover to OpenRouter triggered...", geminiErr);
       const openRouterApiKey = process.env.OPENROUTER_API_KEY;
       if (!openRouterApiKey) throw new Error("API keys failed.");
 
       const openai = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey: openRouterApiKey });
-      const fallbackModel = isImage ? "openai/gpt-4o-mini" : "openrouter/free";
+      
+      // Enforce gpt-4o-mini to guarantee strict JSON formatting on the fallback
+      const fallbackModel = "openai/gpt-4o-mini"; 
       
       const messageContent: any[] = [{ type: "text", text: prompt }];
 
@@ -132,7 +135,14 @@ export async function POST(req: Request) {
     const endIndex = cleanJson.lastIndexOf('}');
     cleanJson = (startIndex !== -1 && endIndex !== -1) ? cleanJson.substring(startIndex, endIndex + 1) : "{}";
 
-    const parsedData = JSON.parse(cleanJson);
+    // Adding a try-catch specifically for the JSON parse to surface better logs if it ever breaks again
+    let parsedData;
+    try {
+      parsedData = JSON.parse(cleanJson);
+    } catch (jsonErr: any) {
+      console.error("JSON Parse failed on string:", cleanJson);
+      throw new Error(`JSON Formatting Error: ${jsonErr.message}`);
+    }
 
     const uniqueItems = new Map();
     (parsedData.line_items || []).forEach((item: any) => {
