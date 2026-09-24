@@ -35,11 +35,12 @@ export default function Dashboard() {
 
     if (qNorm === t) return { match: true, multiplier: 1 };
     
-    const numMatch = q.match(/^([\d.,]+)\s*(.*)$/);
+    // Safely parse expressions like "/ 1000 pcs" or "per 1000 pieces"
+    const numMatch = q.match(/(?:per|\/|\b)\s*([\d.,]+)\s*([a-z]+)/i);
     if (numMatch) {
       const num = parseFloat(numMatch[1].replace(/,/g, ''));
       const text = normalizeUom(numMatch[2]);
-      if (text === t) return { match: true, multiplier: num };
+      if (text === t && num > 0) return { match: true, multiplier: num };
     }
 
     if (qNorm === 'kg' && t === 'g') return { match: true, multiplier: 1000 };
@@ -231,7 +232,6 @@ export default function Dashboard() {
           </label>
         </div>
 
-        {/* HORIZONTAL SCROLL & STICKY FIRST COLUMN ENABLED */}
         <div className="flex-1 overflow-auto bg-slate-950 rounded-xl border border-slate-800">
           <table className="w-full text-left text-sm border-collapse min-w-max">
             <thead>
