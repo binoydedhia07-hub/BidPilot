@@ -12,6 +12,9 @@ export async function POST(req: Request) {
     const buffer = Buffer.from(await file.arrayBuffer());
     const mimeType = file.type || "application/octet-stream";
     const isImage = mimeType.startsWith("image/") && !mimeType.includes("svg");
+    
+    // PERFORMANCE OPTIMIZATION: Only base64-encode true binaries.
+    const isBinary = isImage || mimeType.includes("pdf") || mimeType.includes("spreadsheet") || mimeType.includes("excel");
 
     const prompt = `
       You are an expert enterprise procurement parsing engine.
@@ -68,31 +71,57 @@ export async function POST(req: Request) {
       const genAI = new GoogleGenerativeAI(geminiApiKey);
       const model = genAI.getGenerativeModel({ 
         model: "gemini-1.5-flash",
-        generationConfig: { responseMimeType: "application/json" }
+        generationConfig: { 
+          responseMimeType: "application/json",
+          maxOutputTokens: 2048,
+          temperature: 0.1 
+        }
       });
 
-      const result = await model.generateContent([
-        prompt,
-        { inlineData: { data: buffer.toString("base64"), mimeType: mimeType } }
-      ]);
+      const contents: any[] = [prompt];
+      if (isBinary) {
+        contents.push({ inlineData: { data: buffer.toString("base64"), mimeType: mimeType } });
+      } else {
+        contents.push(`\n\nRaw Document Text:\n${buffer.toString("utf-8")}`);
+      }
+
+      // Race Gemini against an 8.5-second timeout to prevent sluggish hangs
+      const geminiPromise = model.generateContent(contents);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Gemini timeout - fast failing over")), 8500)
+      );
+
+      const result: any = await Promise.race([geminiPromise, timeoutPromise]);
       rawText = result.response.text();
       
     } catch (geminiErr) {
-      console.warn("Gemini primary parser failed, falling back to OpenRouter...", geminiErr);
+      console.warn("Fast failover to OpenRouter triggered...", geminiErr);
       const openRouterApiKey = process.env.OPENROUTER_API_KEY;
       if (!openRouterApiKey) throw new Error("API keys failed.");
 
       const openai = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey: openRouterApiKey });
       const fallbackModel = isImage ? "openai/gpt-4o-mini" : "openrouter/free";
       
-      const messageContent: any[] = isImage 
-        ? [ { type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${mimeType};base64,${buffer.toString("base64")}` } } ]
-        : [ { type: "text", text: `${prompt}\n\nDocument Data:\n${buffer.toString("utf-8")}` } ];
+      const messageContent: any[] = [{ type: "text", text: prompt }];
+
+      if (isBinary) {
+        messageContent.push({
+          type: "image_url",
+          image_url: { url: `data:${mimeType};base64,${buffer.toString("base64")}` }
+        });
+      } else {
+        messageContent.push({
+          type: "text",
+          text: `\n\nDocument Text:\n${buffer.toString("utf-8")}`
+        });
+      }
 
       const completion = await openai.chat.completions.create({
         model: fallbackModel,
         messages: [{ role: "user", content: messageContent }],
-        response_format: { type: "json_object" }
+        response_format: { type: "json_object" },
+        max_tokens: 2048,
+        temperature: 0.1
       });
       rawText = completion?.choices?.[0]?.message?.content || "{}";
     }
