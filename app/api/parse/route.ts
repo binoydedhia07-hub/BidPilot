@@ -20,14 +20,31 @@ export async function POST(req: Request) {
     const prompt = `
       You are an expert enterprise procurement parsing engine.
       
-      CRITICAL INSTRUCTIONS FOR MATH, MOQs, AND CURRENCY (READ CAREFULLY):
-      1. LOT PRICING (DIVISION REQUIRED): If a vendor quotes a bulk lot (e.g., "$510.00 / 1000 pcs"), you MUST mathematically divide the price by the lot size to get the single-unit price (e.g., 510 / 1000 = 0.51). Set "unit_price": 0.51.
-      2. TABULAR UNIT PRICES (NO DIVISION): If the quote has explicit columns for "Qty" and "Unit Price" (e.g., Qty=4000, Unit Price=3350), DO NOT DIVIDE. The "unit_price" is exactly 3350.
-      3. CLEAN UoM: "quoted_uom" MUST be letters only (e.g., "pieces", "rolls", "Carton"). NEVER put numbers in the UoM.
-      4. MOQ REQUIRED: You MUST extract the Minimum Order Quantity (MOQ). If the text says "MOQ 10000", set "moq_required": 10000. If no MOQ is stated, set 0.
-      5. CURRENCY: You MUST extract the currency (e.g., USD, INR, EUR) and place it in "commercials.currency".
-      6. EXACT BASELINE MATCH: Compare item to: ${rfxCategories}. If it matches, "master_item_category" MUST be the EXACT identical string. If it does not map, leave blank "".
+      CRITICAL GENERALIZED EXTRACTION RULES:
       
+      1. STRUCTURED TABULAR DATA (NO DIVISION):
+         If the document provides distinct data fields, commas, or columns for "Quantity" and "Unit Price", the stated Unit Price is already the correct price per quoted UoM. 
+         - Extract the "unit_price" exactly as stated. 
+         - NEVER divide the Unit Price by the Quantity column.
+         - Extract the "moq_required" exactly as stated in its dedicated column or field (default to 0 if missing).
+
+      2. BULK/LOT PRICING IN TEXT STRINGS (DIVISION REQUIRED):
+         If the document lacks distinct tabular columns and instead quotes a bulk lot price within a single text description (e.g., a rate followed by "/ 1000 pcs" or "per 1000 units"):
+         - You MUST mathematically calculate the single-unit price by dividing the bulk price by the lot size.
+         - Set the calculated result as the "unit_price".
+         - Set the "quoted_uom" to the base unit (e.g., "pieces", "units").
+
+      3. UNIT OF MEASURE (UoM):
+         - "quoted_uom" must be text only (e.g., "pieces", "Carton", "rolls", "kg", "Pallet").
+         - NEVER include quantities or numbers in the UoM.
+      
+      4. SEMANTIC MATCHING:
+         Compare the item to this strict RFx Baseline: ${rfxCategories}. If it logically matches, output the EXACT identical string in "master_item_category". If it does not map, leave blank "".
+         
+      5. COMMERCIALS:
+         - Extract the currency (e.g., USD, INR) from the document headers.
+         - Put conditional terms in "conditional_notes".
+
       Return ONLY a pure valid JSON object with this exact schema:
       {
         "vendor_name": "${vendorName}",
