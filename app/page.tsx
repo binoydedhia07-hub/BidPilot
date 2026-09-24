@@ -33,22 +33,17 @@ export default function Dashboard() {
     const t = normalizeUom(target);
     const qNorm = normalizeUom(q);
 
+    // 1. Direct match (e.g., pieces === pieces)
     if (qNorm === t) return { match: true, multiplier: 1 };
-    
-    // Safely parse expressions like "/ 1000 pcs" or "per 1000 pieces"
-    const numMatch = q.match(/(?:per|\/|\b)\s*([\d.,]+)\s*([a-z]+)/i);
-    if (numMatch) {
-      const num = parseFloat(numMatch[1].replace(/,/g, ''));
-      const text = normalizeUom(numMatch[2]);
-      if (text === t && num > 0) return { match: true, multiplier: num };
-    }
 
+    // 2. Safe standard metric conversions
     if (qNorm === 'kg' && t === 'g') return { match: true, multiplier: 1000 };
     if (qNorm === 'g' && t === 'kg') return { match: true, multiplier: 0.001 };
 
+    // 3. Fallback: Push to Blue "Unit Mismatch" state for Human Verification
     return { match: false, multiplier: 1 };
   };
-
+  
   const getFxRate = (currency: string) => {
     const c = (currency || "INR").toUpperCase();
     if (c.includes("USD")) return 83.50;
