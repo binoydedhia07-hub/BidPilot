@@ -22,18 +22,18 @@ export async function POST(req: Request) {
       CRITICAL INSTRUCTION: Extract EVERY line item, product, or fee.
       
       LOT PRICING & UNIT NORMALIZATION (CRITICAL):
-      - If a vendor quotes per lot/bundle (e.g. "$510.00 / 1000 pcs", "Rs 1000 for 1000 pieces", "Rs 200 for 10 rolls"):
-        1. Calculate the TRUE SINGLE-UNIT PRICE: divide the price by the lot quantity (e.g. 510 / 1000 = 0.51).
+      - If a vendor quotes per lot/bundle (e.g. "$510.00 / 1000 pcs", "Rs 1000 for 1000 pieces"):
+        1. Calculate TRUE SINGLE-UNIT PRICE: divide price by lot quantity (e.g. 510 / 1000 = 0.51).
         2. Set "unit_price" to this calculated single-unit figure.
-        3. Set "quoted_uom" to the base unit (e.g. "pieces", "rolls", "kg").
-        4. Set "quoted_qty" to the lot quantity (e.g. 1000).
+        3. Set "quoted_uom" to base unit ("pieces", "rolls", "kg").
+        4. Set "quoted_qty" to lot quantity (e.g. 1000).
       
       NORMALIZATION RULES:
-      1. EXACT DESCRIPTION: Capture the exact text written on the vendor's quote. Escape all quotation marks (e.g., 3\\").
-      2. SEMANTIC MATCHING: Compare the item to this strict RFx Baseline: ${rfxCategories}. Map it to "master_item_category" if it logically matches, otherwise leave blank.
-      3. UoM & MOQ: Extract the unit of measure and MOQ (default 0).
-      4. COMMERCIALS & CONDITIONS: Extract currency, taxes, immediate flat discounts, shipping, and warranty. 
-         CRITICAL: If a discount or rebate is conditional (e.g. "5% rebate if annual order volume exceeds $150,000") or refers to future changes ("20% increase post Dec"), put it in "conditional_notes". Do NOT put it in "immediate_discount_pct".
+      1. EXACT DESCRIPTION: Capture exact text. Escape all quotation marks (e.g., 3\\").
+      2. SEMANTIC MATCHING (CRITICAL): Compare item to this strict RFx Baseline: ${rfxCategories}. If it logically matches, you MUST output the EXACT identical string from the baseline in the "master_item_category" field. If it does NOT map, leave it perfectly blank ("").
+      3. UoM & MOQ: Extract unit of measure and MOQ (default 0).
+      4. COMMERCIALS & CONDITIONS: Extract currency, taxes, immediate flat discounts, shipping, warranty. 
+         If conditional or future ("5% rebate on X", "20% increase post Dec"), put in "conditional_notes" array.
       
       Return ONLY a pure valid JSON object with this exact schema:
       {
@@ -42,7 +42,7 @@ export async function POST(req: Request) {
           "currency": "String (e.g., INR, USD, EUR)",
           "payment_terms": "String",
           "freight_terms": "String",
-          "warranty_terms": "String (e.g., 1 Year, None)",
+          "warranty_terms": "String",
           "immediate_discount_pct": "Number (ONLY if unconditional, else 0)",
           "tax_pct": "Number (default 0)",
           "shipping_cost_flat": "Number (default 0)",
@@ -55,7 +55,7 @@ export async function POST(req: Request) {
             "master_item_category": "String",
             "quoted_qty": "Number",
             "quoted_uom": "String",
-            "unit_price": "Number (SINGLE UNIT PRICE ONLY)",
+            "unit_price": "Number",
             "moq_required": "Number"
           }
         ]
@@ -73,7 +73,7 @@ export async function POST(req: Request) {
         model: "gemini-1.5-flash",
         generationConfig: { 
           responseMimeType: "application/json",
-          maxOutputTokens: 2048,
+          maxOutputTokens: 4096, // Increased to prevent truncated JSON
           temperature: 0.1 
         }
       });
@@ -85,13 +85,14 @@ export async function POST(req: Request) {
         contents.push(`\n\nRaw Document Text:\n${buffer.toString("utf-8")}`);
       }
 
-      // Race Gemini against an 8.5-second timeout to prevent sluggish hangs
+      let timeoutId: any;
       const geminiPromise = model.generateContent(contents);
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("Gemini timeout - fast failing over")), 8500)
-      );
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error("Gemini timeout - fast failing over")), 8500);
+      });
 
       const result: any = await Promise.race([geminiPromise, timeoutPromise]);
+      clearTimeout(timeoutId); // Prevents the function from hanging on Vercel
       rawText = result.response.text();
       
     } catch (geminiErr) {
@@ -120,7 +121,7 @@ export async function POST(req: Request) {
         model: fallbackModel,
         messages: [{ role: "user", content: messageContent }],
         response_format: { type: "json_object" },
-        max_tokens: 2048,
+        max_tokens: 4096,
         temperature: 0.1
       });
       rawText = completion?.choices?.[0]?.message?.content || "{}";
