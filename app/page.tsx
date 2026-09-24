@@ -139,7 +139,9 @@ export default function Dashboard() {
     rfxBaseline.forEach(rfx => {
       const vItem = v.line_items?.find((i: any) => i.master_item_category === rfx.category && !i.is_extra);
       if (vItem && vItem.normalized_price_inr && vItem.semantic_confirmed && vItem.hitl_resolved) {
-        subtotal += vItem.normalized_price_inr * rfx.req_qty;
+        const moq = Number(vItem.moq_required) || 0;
+        const actualQtyToBuy = Math.max(rfx.req_qty, moq);
+        subtotal += vItem.normalized_price_inr * actualQtyToBuy;
       }
     });
     getAvailableItemsForVendor(v).forEach((i: any) => {
@@ -168,22 +170,26 @@ export default function Dashboard() {
     setChatLog((prev) => [...prev, { role: "user", text: uiText, apiText: backendText }]);
     setQuestion("");
 
-    // ENRICH DATA FOR CHAT AI SO IT KNOWS THE CALCULATED TOTALS
     const enrichedContext = vendorData.map(v => {
       const math = calculateVendorMath(v);
       return {
         vendor_name: v.vendor_name,
-        total_landed_cost_inr: math.landedCost,
-        subtotal_inr: math.subtotal,
-        commercials: v.commercials,
+        true_landed_cost_inr: math.landedCost,
+        commercial_terms: v.commercials,
         vendor_scorecard: v.vendor_scorecard || { market_risk_rating: "3.5", compliance_score: 85, shipping_lead_time_days: 14 },
-        line_items: (v.line_items || []).map((item: any) => {
+        line_items_analysis: (v.line_items || []).map((item: any) => {
           const rfx = rfxBaseline.find(r => r.category === item.master_item_category && !item.is_extra);
-          const evalQty = rfx ? rfx.req_qty : (Number(item.quoted_qty) || 1);
+          const reqQty = rfx ? rfx.req_qty : (Number(item.quoted_qty) || 1);
+          const moq = Number(item.moq_required) || 0;
+          const actualQtyForcedToBuy = Math.max(reqQty, moq);
           return {
-            ...item,
-            evaluated_rfx_quantity: evalQty,
-            calculated_line_total_inr: (item.normalized_price_inr || 0) * evalQty
+            category: item.master_item_category || item.vendor_raw_description,
+            unit_price_inr: item.normalized_price_inr,
+            rfx_requested_qty: reqQty,
+            vendor_moq: moq,
+            actual_qty_forced_to_buy: actualQtyForcedToBuy,
+            moq_penalty_applied: moq > reqQty ? "YES - Cost heavily inflated due to MOQ" : "NO",
+            total_line_cost_inr: (item.normalized_price_inr || 0) * actualQtyForcedToBuy
           };
         })
       };
@@ -219,287 +225,284 @@ export default function Dashboard() {
             <h1 className="text-2xl font-bold text-white tracking-tight">BidPilot Enterprise</h1>
             <p className="text-sm text-slate-400">Intelligent RFx Normalization & Insights</p>
           </div>
-          <label className="cursor-pointer bg-blue-600 hover:bg-blue-500 text-white font-medium px-4 py-2 rounded-lg transition shadow-sm text-sm">
+          <label className="cursor-pointer bg-blue-600 hover:bg-blue-500 text-white font-medium px-4 py-2 rounded-lg transition shadow-sm text-sm whitespace-nowrap">
             {loading ? "Extracting..." : "+ Ingest Vendor Quote"}
             <input type="file" onChange={handleFileUpload} className="hidden" disabled={loading} />
           </label>
         </div>
 
-        <div className="flex-1 overflow-auto bg-slate-950 rounded-xl border border-slate-800 p-4">
-          {vendorData.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-slate-500">Upload a quote to populate the evaluation matrix.</div>
-          ) : (
-            <table className="w-full text-left text-sm border-collapse table-fixed">
-              <thead>
-                <tr className="border-b-2 border-slate-700 bg-slate-900">
-                  <th className="p-3 w-1/4 align-top">
-                    <div className="font-bold text-white mb-4">Requirement</div>
-                    <div className="text-xs text-slate-500 uppercase tracking-wider">Landed Cost (INR)</div>
-                  </th>
-                  {vendorData.map((v, i) => {
-                    const math = calculateVendorMath(v);
-                    const warranty = v.commercials?.warranty_terms || "None";
-                    const currency = (v.commercials?.currency || "INR").toUpperCase();
-                    const fxRate = getFxRate(currency);
-                    
-                    return (
-                      <th key={i} className="p-3 font-normal text-xs align-top border-l border-slate-800 w-1/3">
-                        <div className="font-bold text-base text-white mb-1">{v.vendor_name}</div>
-                        {currency !== "INR" && <div className="text-[10px] text-blue-400 mb-2">Quoted in {currency} (Est. 1 = ₹{fxRate.toFixed(2)})</div>}
+        {/* HORIZONTAL SCROLL & STICKY FIRST COLUMN ENABLED */}
+        <div className="flex-1 overflow-auto bg-slate-950 rounded-xl border border-slate-800">
+          <table className="w-full text-left text-sm border-collapse min-w-max">
+            <thead>
+              <tr className="border-b-2 border-slate-700 bg-slate-900">
+                <th className="p-4 min-w-[250px] max-w-[300px] align-top bg-slate-900 sticky left-0 z-20 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.5)] border-r border-slate-800">
+                  <div className="font-bold text-white mb-4">Requirement</div>
+                  <div className="text-xs text-slate-500 uppercase tracking-wider">True Landed Cost</div>
+                </th>
+                {vendorData.map((v, i) => {
+                  const math = calculateVendorMath(v);
+                  const warranty = v.commercials?.warranty_terms || "None";
+                  const currency = (v.commercials?.currency || "INR").toUpperCase();
+                  const fxRate = getFxRate(currency);
+                  
+                  return (
+                    <th key={i} className="p-4 font-normal text-xs align-top border-l border-slate-800 min-w-[320px] w-[320px]">
+                      <div className="font-bold text-base text-white mb-1">{v.vendor_name}</div>
+                      {currency !== "INR" && <div className="text-[10px] text-blue-400 mb-2">Quoted in {currency} (Est. 1 = ₹{fxRate.toFixed(2)})</div>}
+                      
+                      <div className="bg-slate-900 border border-slate-800 rounded p-3 mb-3 shadow-inner">
+                        <div className="flex justify-between text-slate-400 mb-1"><span>Subtotal (MOQ Enforced):</span> <span>₹{math.subtotal.toFixed(2)}</span></div>
+                        {math.discountPct > 0 && <div className="flex justify-between text-emerald-400 mb-1"><span>Discount ({math.discountPct}%):</span> <span>- ₹{math.discountAmt.toFixed(2)}</span></div>}
+                        {math.taxPct > 0 && <div className="flex justify-between text-red-400 mb-1"><span>Tax ({math.taxPct}%):</span> <span>+ ₹{math.taxAmt.toFixed(2)}</span></div>}
+                        {math.shippingFlat > 0 && <div className="flex justify-between text-red-400 mb-1"><span>Shipping:</span> <span>+ ₹{math.shippingFlat.toFixed(2)}</span></div>}
                         
-                        <div className="bg-slate-900 border border-slate-800 rounded p-2 mb-3">
-                          <div className="flex justify-between text-slate-400 mb-1"><span>Subtotal:</span> <span>₹{math.subtotal.toFixed(2)}</span></div>
-                          {math.discountPct > 0 && <div className="flex justify-between text-emerald-400 mb-1"><span>Discount ({math.discountPct}%):</span> <span>- ₹{math.discountAmt.toFixed(2)}</span></div>}
-                          {math.taxPct > 0 && <div className="flex justify-between text-red-400 mb-1"><span>Tax ({math.taxPct}%):</span> <span>+ ₹{math.taxAmt.toFixed(2)}</span></div>}
-                          {math.shippingFlat > 0 && <div className="flex justify-between text-red-400 mb-1"><span>Shipping:</span> <span>+ ₹{math.shippingFlat.toFixed(2)}</span></div>}
-                          
-                          <div className="border-t border-slate-700 mt-2 pt-2 flex justify-between font-bold text-lg text-emerald-400">
-                            <span>Total INR:</span> <span>₹{math.landedCost.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}</span>
+                        <div className="border-t border-slate-700 mt-2 pt-2 flex justify-between font-bold text-lg text-emerald-400">
+                          <span>Total INR:</span> <span>₹{math.landedCost.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 0 })}</span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1 mb-2">
+                        <div className={`text-[10px] p-2 rounded ${warranty !== "None" ? "bg-blue-900/30 text-blue-300 border border-blue-800" : "bg-slate-800 text-slate-500"}`}>
+                          🛡️ Warranty: {warranty}
+                        </div>
+                        
+                        {v.commercials?.conditional_notes?.map((note: string, idx: number) => (
+                          <div key={idx} className="text-[10px] leading-tight text-amber-300 bg-amber-900/40 border border-amber-700/50 p-2 rounded">
+                            ⚠️ {note}
+                          </div>
+                        ))}
+                      </div>
+
+                      <details className="mt-3 group">
+                        <summary className="text-[11px] text-blue-400 cursor-pointer hover:text-blue-300 font-medium flex items-center justify-between bg-blue-900/20 p-2 rounded border border-blue-900/50 list-none [&::-webkit-details-marker]:hidden transition">
+                          <span>📊 View Scorecard & Risk</span>
+                          <span className="group-open:rotate-180 transition-transform">▼</span>
+                        </summary>
+                        <div className="mt-2 p-3 bg-slate-900/80 border border-slate-700/50 rounded space-y-2 text-[11px] shadow-inner">
+                          <div className="flex justify-between border-b border-slate-700/50 pb-1">
+                            <span className="text-slate-400">Risk Rating:</span>
+                            <span className="text-white font-medium">{v.vendor_scorecard?.market_risk_rating || "3.5"}/5.0</span>
+                          </div>
+                          <div className="flex justify-between border-b border-slate-700/50 pb-1">
+                            <span className="text-slate-400">Compliance:</span>
+                            <span className="text-white font-medium">{v.vendor_scorecard?.compliance_score || "85"}%</span>
+                          </div>
+                          <div className="flex justify-between pb-1">
+                            <span className="text-slate-400">Lead Time:</span>
+                            <span className="text-white font-medium">{v.vendor_scorecard?.shipping_lead_time_days || "14"} days</span>
                           </div>
                         </div>
+                      </details>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/60">
+              {rfxBaseline.map((rfxItem, rowIdx) => (
+                <tr key={rowIdx} className="hover:bg-slate-900/50 transition h-28">
+                  <td className="p-4 align-top bg-slate-950 sticky left-0 z-10 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.5)] border-r border-slate-800">
+                    <div className="font-medium text-slate-300">{rfxItem.category}</div>
+                    <div className="text-xs text-slate-500 mt-1">RFx Target: {rfxItem.req_qty} {rfxItem.base_uom}</div>
+                  </td>
+                  
+                  {vendorData.map((v, colIdx) => {
+                    const vItem = v.line_items?.find((i: any) => i.master_item_category === rfxItem.category && !i.is_extra);
 
-                        <div className="space-y-1 mb-2">
-                          <div className={`text-[10px] p-1.5 rounded ${warranty !== "None" ? "bg-blue-900/30 text-blue-300 border border-blue-800" : "bg-slate-800 text-slate-500"}`}>
-                            🛡️ Warranty: {warranty}
-                          </div>
-                          
-                          {v.commercials?.conditional_notes?.map((note: string, idx: number) => (
-                            <div key={idx} className="text-[10px] leading-tight text-amber-300 bg-amber-900/40 border border-amber-700/50 p-1.5 rounded">
-                              ⚠️ {note}
-                            </div>
-                          ))}
-                        </div>
-
-                        {/* ALWAYS RENDER SCORECARD ACCORDION */}
-                        <details className="mt-3 group">
-                          <summary className="text-[10px] text-blue-400 cursor-pointer hover:text-blue-300 font-medium flex items-center justify-between bg-blue-900/20 p-2 rounded border border-blue-900/50 list-none [&::-webkit-details-marker]:hidden transition">
-                            <span>📊 View Scorecard & Risk</span>
-                            <span className="group-open:rotate-180 transition-transform">▼</span>
-                          </summary>
-                          <div className="mt-2 p-2 bg-slate-900/80 border border-slate-700/50 rounded space-y-2 text-[10px] shadow-inner">
-                            <div className="flex justify-between border-b border-slate-700/50 pb-1">
-                              <span className="text-slate-400">Risk Rating:</span>
-                              <span className="text-white font-medium">{v.vendor_scorecard?.market_risk_rating || "3.5"}/5.0</span>
-                            </div>
-                            <div className="flex justify-between border-b border-slate-700/50 pb-1">
-                              <span className="text-slate-400">Compliance:</span>
-                              <span className="text-white font-medium">{v.vendor_scorecard?.compliance_score || "85"}%</span>
-                            </div>
-                            <div className="flex justify-between border-b border-slate-700/50 pb-1">
-                              <span className="text-slate-400">Lead Time:</span>
-                              <span className="text-white font-medium">{v.vendor_scorecard?.shipping_lead_time_days || "14"} days</span>
-                            </div>
-                          </div>
-                        </details>
-                      </th>
-                    );
-                  })}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60">
-                {rfxBaseline.map((rfxItem, rowIdx) => (
-                  <tr key={rowIdx} className="hover:bg-slate-900/50 transition h-24">
-                    <td className="p-3 align-top">
-                      <div className="font-medium text-slate-300">{rfxItem.category}</div>
-                      <div className="text-xs text-slate-500 mt-1">RFx Target: {rfxItem.req_qty} {rfxItem.base_uom}</div>
-                    </td>
-                    
-                    {vendorData.map((v, colIdx) => {
-                      const vItem = v.line_items?.find((i: any) => i.master_item_category === rfxItem.category && !i.is_extra);
-
-                      if (!vItem) {
-                        const availableItems = getAvailableItemsForVendor(v);
-                        return (
-                          <td key={colIdx} className="p-0 border-l border-slate-800 align-top bg-red-950/10">
-                            <div className="p-3 h-full flex flex-col justify-start">
-                              <div className="text-[10px] text-red-400 font-bold tracking-wider uppercase mb-2">❌ Missing</div>
-                              <select 
-                                className="w-full bg-slate-900 border border-slate-700 text-slate-300 text-[10px] rounded p-1.5 outline-none focus:border-blue-500"
-                                value=""
-                                onChange={(e) => {
-                                  const desc = e.target.value;
-                                  if (!desc) return;
-                                  setVendorData(prev => prev.map((vend, id) => {
-                                    if (id !== colIdx) return vend;
-                                    const fxRate = getFxRate(vend.commercials?.currency);
-                                    return {
-                                      ...vend,
-                                      line_items: vend.line_items.map((it: any) => {
-                                        if (it.vendor_raw_description === desc) {
-                                          const autoConv = attemptAutoConversion(it.quoted_uom, rfxItem.base_uom);
-                                          return { 
-                                            ...it, 
-                                            master_item_category: rfxItem.category, 
-                                            is_extra: false, 
-                                            semantic_confirmed: true, 
-                                            hitl_resolved: autoConv.match,
-                                            conversion_multiplier: autoConv.multiplier,
-                                            normalized_price_inr: autoConv.match ? (((Number(it.unit_price) || 0) * fxRate) / autoConv.multiplier) : 0
-                                          };
-                                        }
-                                        return it;
-                                      })
-                                    };
-                                  }));
-                                }}
-                              >
-                                <option value="" disabled>Select from quote to map...</option>
-                                {availableItems.map((ui: any, idx: number) => (
-                                  <option key={idx} value={ui.vendor_raw_description}>{ui.vendor_raw_description} ({ui.quoted_uom || 'no unit'})</option>
-                                ))}
-                              </select>
-                            </div>
-                          </td>
-                        );
-                      }
-
-                      if (!vItem.semantic_confirmed) {
-                        return (
-                          <td key={colIdx} className="p-0 border-l border-slate-800 align-top bg-amber-950/20">
-                            <div className="p-3 h-full flex flex-col justify-start border-b-2 border-amber-500/50">
-                              <div className="text-[10px] text-amber-500 font-bold tracking-wider uppercase mb-2">🔍 AI Suggestion</div>
-                              <div className="text-[11px] text-white mb-3 leading-tight font-medium">"{vItem.vendor_raw_description}"</div>
-                              <div className="flex gap-2 mt-auto">
-                                <button 
-                                  onClick={() => setVendorData(prev => prev.map((vend, id) => {
-                                    if (id !== colIdx) return vend;
-                                    const fxRate = getFxRate(vend.commercials?.currency);
-                                    return {
-                                      ...vend,
-                                      line_items: vend.line_items.map((it: any) => {
-                                        if (it !== vItem) return it;
+                    if (!vItem) {
+                      const availableItems = getAvailableItemsForVendor(v);
+                      return (
+                        <td key={colIdx} className="p-0 border-l border-slate-800 align-top bg-red-950/10 min-w-[320px]">
+                          <div className="p-4 h-full flex flex-col justify-start">
+                            <div className="text-[10px] text-red-400 font-bold tracking-wider uppercase mb-2">❌ Missing</div>
+                            <select 
+                              className="w-full bg-slate-900 border border-slate-700 text-slate-300 text-xs rounded p-2 outline-none focus:border-blue-500 cursor-pointer"
+                              value=""
+                              onChange={(e) => {
+                                const desc = e.target.value;
+                                if (!desc) return;
+                                setVendorData(prev => prev.map((vend, id) => {
+                                  if (id !== colIdx) return vend;
+                                  const fxRate = getFxRate(vend.commercials?.currency);
+                                  return {
+                                    ...vend,
+                                    line_items: vend.line_items.map((it: any) => {
+                                      if (it.vendor_raw_description === desc) {
                                         const autoConv = attemptAutoConversion(it.quoted_uom, rfxItem.base_uom);
-                                        return {
-                                          ...it,
-                                          semantic_confirmed: true,
+                                        return { 
+                                          ...it, 
+                                          master_item_category: rfxItem.category, 
+                                          is_extra: false, 
+                                          semantic_confirmed: true, 
                                           hitl_resolved: autoConv.match,
                                           conversion_multiplier: autoConv.multiplier,
                                           normalized_price_inr: autoConv.match ? (((Number(it.unit_price) || 0) * fxRate) / autoConv.multiplier) : 0
-                                        }
-                                      })
-                                    }
-                                  }))}
-                                  className="bg-emerald-600/20 text-emerald-400 border border-emerald-600/30 hover:bg-emerald-600/40 text-[10px] px-2 py-1.5 rounded w-full transition">Confirm</button>
-                                <button 
-                                  onClick={() => setVendorData(prev => prev.map((vend, id) => id !== colIdx ? vend : { ...vend, line_items: vend.line_items.map((it: any) => it === vItem ? { ...it, master_item_category: "", is_extra: true, semantic_confirmed: false } : it) }))}
-                                  className="bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 text-[10px] px-2 py-1.5 rounded w-full transition">Reject</button>
-                              </div>
-                            </div>
-                          </td>
-                        );
-                      }
-
-                      if (!vItem.hitl_resolved) {
-                        return (
-                          <td key={colIdx} className="p-0 border-l border-slate-800 align-top bg-blue-950/20">
-                            <div className="p-3 h-full flex flex-col justify-start border-b-2 border-blue-500/50">
-                              <div className="text-[10px] text-blue-400 font-bold tracking-wider uppercase mb-1">⚖️ Unit Mismatch</div>
-                              <div className="text-[9px] text-slate-400 mb-2">Vendor: <span className="text-slate-200 uppercase">{vItem.quoted_uom || "None"}</span> | Target: <span className="text-slate-200 uppercase">{rfxItem.base_uom}</span></div>
-                              
-                              <div className="flex items-center gap-2 mb-2">
-                                <span className="text-[10px] text-slate-500 w-12">Multiplier:</span>
-                                <input 
-                                  type="number" step="any" min="0.0001" 
-                                  className="bg-slate-950 border border-slate-700 text-white text-xs flex-1 p-1 rounded outline-none focus:border-blue-500" 
-                                  value={vItem.conversion_multiplier || 1} 
-                                  onChange={(e) => {
-                                    const val = Number(e.target.value) || 1;
-                                    setVendorData(prev => prev.map((vend, id) => id !== colIdx ? vend : { ...vend, line_items: vend.line_items.map((it: any) => it === vItem ? { ...it, conversion_multiplier: val } : it) }));
-                                  }} 
-                                />
-                              </div>
-                              <button 
-                                onClick={() => {
-                                  setVendorData(prev => prev.map((vend, id) => {
-                                    if (id !== colIdx) return vend;
-                                    const fxRate = getFxRate(vend.commercials?.currency);
-                                    return {
-                                      ...vend,
-                                      line_items: vend.line_items.map((it: any) => {
-                                        if (it !== vItem) return it;
-                                        return { ...it, normalized_price_inr: ((Number(it.unit_price) || 0) * fxRate) / (it.conversion_multiplier || 1), hitl_resolved: true };
-                                      })
-                                    };
-                                  }));
-                                }}
-                                className="bg-blue-600 hover:bg-blue-500 text-white text-[10px] px-2 py-1.5 rounded w-full mt-auto transition">
-                                Apply & Recalculate
-                              </button>
-                            </div>
-                          </td>
-                        );
-                      }
-
-                      const hasMOQIssue = vItem.moq_required > rfxItem.req_qty;
-                      return (
-                        <td key={colIdx} className="p-0 border-l border-slate-800 align-top group relative">
-                          <div className="p-3 h-full flex flex-col justify-start">
-                            <button 
-                              title="Unmap this item"
-                              onClick={() => {
-                                setVendorData(prev => prev.map((vend, id) => id !== colIdx ? vend : { ...vend, line_items: vend.line_items.map((it: any) => it === vItem ? { ...it, master_item_category: "", is_extra: true, semantic_confirmed: false, hitl_resolved: false } : it) }));
+                                        };
+                                      }
+                                      return it;
+                                    })
+                                  };
+                                }));
                               }}
-                              className="absolute top-2 right-2 text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition text-xs font-bold">
-                              ✕
-                            </button>
-                            <div className="text-[10px] text-slate-400 mb-1 leading-tight w-11/12 pr-4" title={vItem.vendor_raw_description}>
-                              "{vItem.vendor_raw_description}"
-                            </div>
-                            <div className="font-semibold text-emerald-400">
-                              ₹{vItem.normalized_price_inr?.toFixed(2) || 0} <span className="text-[10px] text-slate-500 font-normal">/ {rfxItem.base_uom}</span>
-                            </div>
-                            {hasMOQIssue && <div className="text-[10px] text-red-500 font-bold mt-2 uppercase tracking-wider">⚠️ MOQ Failed: {vItem.moq_required} req</div>}
+                            >
+                              <option value="" disabled>Select from quote to map...</option>
+                              {availableItems.map((ui: any, idx: number) => (
+                                <option key={idx} value={ui.vendor_raw_description}>{ui.vendor_raw_description} ({ui.quoted_uom || 'no unit'})</option>
+                              ))}
+                            </select>
                           </div>
                         </td>
                       );
-                    })}
-                  </tr>
-                ))}
-                
-                {getAllExtras().length > 0 && (
-                  <>
-                    <tr className="bg-slate-900/80">
-                      <td colSpan={vendorData.length + 1} className="p-3 text-xs font-bold text-purple-400 uppercase tracking-wider border-t-2 border-slate-700">
-                        Unmapped & Additional Items
-                      </td>
-                    </tr>
-                    {getAllExtras().map((extraDesc, rowIdx) => (
-                      <tr key={`extra-${rowIdx}`} className="hover:bg-slate-900/50 transition h-20">
-                        <td className="p-3 align-top">
-                          <div className="font-medium text-slate-400">{extraDesc}</div>
-                          <div className="text-[10px] text-slate-600 mt-1 uppercase tracking-wider">Awaiting Assignment</div>
+                    }
+
+                    if (!vItem.semantic_confirmed) {
+                      return (
+                        <td key={colIdx} className="p-0 border-l border-slate-800 align-top bg-amber-950/20 min-w-[320px]">
+                          <div className="p-4 h-full flex flex-col justify-start border-b-2 border-amber-500/50">
+                            <div className="text-[10px] text-amber-500 font-bold tracking-wider uppercase mb-2">🔍 AI Suggestion</div>
+                            <div className="text-xs text-white mb-3 leading-tight font-medium">"{vItem.vendor_raw_description}"</div>
+                            <div className="flex gap-2 mt-auto">
+                              <button 
+                                onClick={() => setVendorData(prev => prev.map((vend, id) => {
+                                  if (id !== colIdx) return vend;
+                                  const fxRate = getFxRate(vend.commercials?.currency);
+                                  return {
+                                    ...vend,
+                                    line_items: vend.line_items.map((it: any) => {
+                                      if (it !== vItem) return it;
+                                      const autoConv = attemptAutoConversion(it.quoted_uom, rfxItem.base_uom);
+                                      return {
+                                        ...it,
+                                        semantic_confirmed: true,
+                                        hitl_resolved: autoConv.match,
+                                        conversion_multiplier: autoConv.multiplier,
+                                        normalized_price_inr: autoConv.match ? (((Number(it.unit_price) || 0) * fxRate) / autoConv.multiplier) : 0
+                                      }
+                                    })
+                                  }
+                                }))}
+                                className="bg-emerald-600/20 text-emerald-400 border border-emerald-600/30 hover:bg-emerald-600/40 text-xs px-3 py-2 rounded w-full transition">Confirm</button>
+                              <button 
+                                onClick={() => setVendorData(prev => prev.map((vend, id) => id !== colIdx ? vend : { ...vend, line_items: vend.line_items.map((it: any) => it === vItem ? { ...it, master_item_category: "", is_extra: true, semantic_confirmed: false } : it) }))}
+                                className="bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 text-xs px-3 py-2 rounded w-full transition">Reject</button>
+                            </div>
+                          </div>
                         </td>
-                        {vendorData.map((v, colIdx) => {
-                          const availableItems = getAvailableItemsForVendor(v);
-                          const vItem = availableItems.find((i: any) => i.vendor_raw_description === extraDesc);
-                          
-                          if (!vItem) return <td key={colIdx} className="p-3 border-l border-slate-800" />;
-                          return (
-                            <td key={colIdx} className="p-3 border-l border-slate-800 align-top">
-                              <div className="font-semibold text-purple-400">
-                                ₹{(Number(vItem.unit_price) * getFxRate(v.commercials?.currency)).toFixed(2)} <span className="text-[10px] text-slate-500 font-normal">/ {vItem.quoted_uom || "unit"}</span>
-                              </div>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </>
-                )}
-              </tbody>
-            </table>
-          )}
+                      );
+                    }
+
+                    if (!vItem.hitl_resolved) {
+                      return (
+                        <td key={colIdx} className="p-0 border-l border-slate-800 align-top bg-blue-950/20 min-w-[320px]">
+                          <div className="p-4 h-full flex flex-col justify-start border-b-2 border-blue-500/50">
+                            <div className="text-[10px] text-blue-400 font-bold tracking-wider uppercase mb-1">⚖️ Unit Mismatch</div>
+                            <div className="text-[10px] text-slate-400 mb-3">Vendor: <span className="text-slate-200 uppercase">{vItem.quoted_uom || "None"}</span> | Target: <span className="text-slate-200 uppercase">{rfxItem.base_uom}</span></div>
+                            
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="text-[10px] text-slate-500 w-16">Multiplier:</span>
+                              <input 
+                                type="number" step="any" min="0.0001" 
+                                className="bg-slate-950 border border-slate-700 text-white text-sm flex-1 p-1.5 rounded outline-none focus:border-blue-500" 
+                                value={vItem.conversion_multiplier || 1} 
+                                onChange={(e) => {
+                                  const val = Number(e.target.value) || 1;
+                                  setVendorData(prev => prev.map((vend, id) => id !== colIdx ? vend : { ...vend, line_items: vend.line_items.map((it: any) => it === vItem ? { ...it, conversion_multiplier: val } : it) }));
+                                }} 
+                              />
+                            </div>
+                            <button 
+                              onClick={() => {
+                                setVendorData(prev => prev.map((vend, id) => {
+                                  if (id !== colIdx) return vend;
+                                  const fxRate = getFxRate(vend.commercials?.currency);
+                                  return {
+                                    ...vend,
+                                    line_items: vend.line_items.map((it: any) => {
+                                      if (it !== vItem) return it;
+                                      return { ...it, normalized_price_inr: ((Number(it.unit_price) || 0) * fxRate) / (it.conversion_multiplier || 1), hitl_resolved: true };
+                                    })
+                                  };
+                                }));
+                              }}
+                              className="bg-blue-600 hover:bg-blue-500 text-white text-xs px-3 py-2 rounded w-full mt-auto transition font-medium">
+                              Apply & Recalculate
+                            </button>
+                          </div>
+                        </td>
+                      );
+                    }
+
+                    const hasMOQIssue = vItem.moq_required > rfxItem.req_qty;
+                    return (
+                      <td key={colIdx} className="p-0 border-l border-slate-800 align-top group relative min-w-[320px]">
+                        <div className="p-4 h-full flex flex-col justify-start">
+                          <button 
+                            title="Unmap this item"
+                            onClick={() => {
+                              setVendorData(prev => prev.map((vend, id) => id !== colIdx ? vend : { ...vend, line_items: vend.line_items.map((it: any) => it === vItem ? { ...it, master_item_category: "", is_extra: true, semantic_confirmed: false, hitl_resolved: false } : it) }));
+                            }}
+                            className="absolute top-2 right-2 text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition text-sm font-bold p-2">
+                            ✕
+                          </button>
+                          <div className="text-xs text-slate-400 mb-1 leading-tight w-11/12 pr-4" title={vItem.vendor_raw_description}>
+                            "{vItem.vendor_raw_description}"
+                          </div>
+                          <div className="font-semibold text-emerald-400 text-sm">
+                            ₹{vItem.normalized_price_inr?.toFixed(2) || 0} <span className="text-[10px] text-slate-500 font-normal">/ {rfxItem.base_uom}</span>
+                          </div>
+                          {hasMOQIssue && <div className="text-[10px] text-red-500 font-bold mt-2 uppercase tracking-wider bg-red-950/40 p-1.5 rounded inline-block border border-red-900/50">⚠️ MOQ Failed: {vItem.moq_required} req</div>}
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+              
+              {getAllExtras().length > 0 && (
+                <>
+                  <tr className="bg-slate-900/80 border-t-4 border-slate-700">
+                    <td className="p-4 align-top bg-slate-950 sticky left-0 z-10 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.5)] border-r border-slate-800">
+                       <span className="text-xs font-bold text-purple-400 uppercase tracking-wider">Additional Items</span>
+                    </td>
+                    <td colSpan={vendorData.length} className="p-4"></td>
+                  </tr>
+                  {getAllExtras().map((extraDesc, rowIdx) => (
+                    <tr key={`extra-${rowIdx}`} className="hover:bg-slate-900/50 transition h-20 border-t border-slate-800/50">
+                      <td className="p-4 align-top bg-slate-950 sticky left-0 z-10 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.5)] border-r border-slate-800">
+                        <div className="font-medium text-slate-400">{extraDesc}</div>
+                        <div className="text-[10px] text-slate-600 mt-1 uppercase tracking-wider">Awaiting Assignment</div>
+                      </td>
+                      {vendorData.map((v, colIdx) => {
+                        const availableItems = getAvailableItemsForVendor(v);
+                        const vItem = availableItems.find((i: any) => i.vendor_raw_description === extraDesc);
+                        
+                        if (!vItem) return <td key={colIdx} className="p-4 border-l border-slate-800 min-w-[320px]" />;
+                        return (
+                          <td key={colIdx} className="p-4 border-l border-slate-800 align-top min-w-[320px]">
+                            <div className="font-semibold text-purple-400 text-sm">
+                              ₹{(Number(vItem.unit_price) * getFxRate(v.commercials?.currency)).toFixed(2)} <span className="text-[10px] text-slate-500 font-normal">/ {vItem.quoted_uom || "unit"}</span>
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 
-      <div className="w-1/3 p-6 flex flex-col bg-slate-950/50">
+      <div className="w-1/3 p-6 flex flex-col bg-slate-950/50 border-l border-slate-800">
         <div className="mb-4">
           <h2 className="text-lg font-bold text-white">BidPilot AI</h2>
           <p className="text-xs text-slate-400">Strict enterprise guardrails active</p>
         </div>
-        <div className="flex-1 overflow-auto space-y-4 mb-4 pr-1">
+        <div className="flex-1 overflow-auto space-y-4 mb-4 pr-2">
           {chatLog.map((msg, i) => (
-            <div key={i} className={`p-4 rounded-lg text-sm ${msg.role === "user" ? "bg-blue-600/20 border border-blue-500/30 text-blue-100 ml-4" : "bg-slate-900 border border-slate-800 text-slate-200 mr-2 prose prose-invert prose-sm max-w-none"}`}>
+            <div key={i} className={`p-4 rounded-xl text-sm leading-relaxed ${msg.role === "user" ? "bg-blue-600/20 border border-blue-500/30 text-blue-100 ml-4" : "bg-slate-900 border border-slate-700 text-slate-200 mr-2 shadow-lg"}`}>
               <div className="text-[10px] font-bold uppercase text-slate-500 mb-2 tracking-wider">
                 {msg.role === "user" ? "Buyer" : "BidPilot"}
               </div>
@@ -508,14 +511,14 @@ export default function Dashboard() {
           ))}
         </div>
         {vendorData.length > 0 && (
-          <div className="mb-3 flex flex-wrap gap-2">
-            <button onClick={() => askCopilot("🏆 Recommend Winner", "Calculate the Total Landed Cost (including discounts, taxes, shipping). Recommend the vendor with the lowest landed cost. DO NOT use tables. Use bullet points.")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">🏆 Recommend Winner</button>
-            <button onClick={() => askCopilot("📦 Check Availability", "Which vendors are missing items from the RFx baseline? DO NOT use tables.")} className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full transition border border-slate-700">📦 Check Availability</button>
+          <div className="mb-4 flex flex-wrap gap-2">
+            <button onClick={() => askCopilot("🏆 Recommend Winner", "Calculate the Holistic Recommendation. Consider True Landed Cost, MOQ Penalties, Scorecard risks, and conditional notes. DO NOT use tables. Use concise bullet points.")} className="text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-full transition border border-slate-600 shadow-sm">🏆 Recommend Winner</button>
+            <button onClick={() => askCopilot("📦 Check Availability", "Which vendors are missing items from the RFx baseline? DO NOT use tables. Use text only.")} className="text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-full transition border border-slate-600 shadow-sm">📦 Check Availability</button>
           </div>
         )}
-        <div className="flex gap-2">
-          <input className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:border-blue-500" value={question} onChange={(e) => setQuestion(e.target.value)} onKeyDown={(e) => e.key === "Enter" && askCopilot()} placeholder="Ask BidPilot..." />
-          <button onClick={() => askCopilot()} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition">Send</button>
+        <div className="flex gap-3">
+          <input className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-sm text-slate-100 outline-none focus:border-blue-500 shadow-inner" value={question} onChange={(e) => setQuestion(e.target.value)} onKeyDown={(e) => e.key === "Enter" && askCopilot()} placeholder="Ask BidPilot..." />
+          <button onClick={() => askCopilot()} className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-lg text-sm font-bold transition shadow-md">Send</button>
         </div>
       </div>
     </div>
